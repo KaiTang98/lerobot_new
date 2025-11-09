@@ -56,6 +56,14 @@ def make_robot_from_config(config: RobotConfig) -> Robot:
         from .reachy2 import Reachy2Robot
 
         return Reachy2Robot(config)
+    elif config.type == "robotiq_gripper":
+        from .robotiq import RobotiqGripper
+
+        return RobotiqGripper(config)
+    elif config.type == "denso_windows":
+        from .denso_windows.denso_windows import DensoWindows
+
+        return DensoWindows(config)
     elif config.type == "mock_robot":
         from tests.mocks.mock_robot import MockRobot
 

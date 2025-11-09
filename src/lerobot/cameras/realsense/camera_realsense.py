@@ -117,9 +117,34 @@ class RealSenseCamera(Camera):
 
         self.config = config
 
-        if config.serial_number_or_name.isdigit():
-            self.serial_number = config.serial_number_or_name
+        # The user may pass either a serial number (which can be numeric or
+        # alphanumeric depending on the camera) or a human-readable device name.
+        # Old logic used `str.isdigit()` to detect a serial number which fails for
+        # alphanumeric serials (e.g. 'f1181599'). Try to resolve the value
+        # robustly by checking if it matches any discovered device `id` first,
+        # then fall back to treating it as a numeric-only serial, and finally as
+        # a device name.
+        provided = config.serial_number_or_name
+
+        resolved_serial = None
+        try:
+            # try to find a device whose reported serial (stored as 'id') equals the provided string
+            camera_infos = self.find_cameras()
+            matching = [cam for cam in camera_infos if str(cam.get("id")) == str(provided)]
+            if matching:
+                resolved_serial = str(matching[0].get("id"))
+        except Exception:
+            # If pyrealsense2 isn't available or find_cameras fails, we'll fall back
+            # to the other resolution heuristics below.
+            resolved_serial = None
+
+        if resolved_serial is not None:
+            self.serial_number = resolved_serial
+        elif str(provided).isdigit():
+            # purely numeric string — assume it's a serial
+            self.serial_number = str(provided)
         else:
+            # treat provided string as a device "name" and look up its serial
             self.serial_number = self._find_serial_number_from_name(config.serial_number_or_name)
 
         self.fps = config.fps
@@ -247,22 +272,24 @@ class RealSenseCamera(Camera):
     def _find_serial_number_from_name(self, name: str) -> str:
         """Finds the serial number for a given unique camera name."""
         camera_infos = self.find_cameras()
-        found_devices = [cam for cam in camera_infos if str(cam["name"]) == name]
+
+        # Find devices whose human-readable name matches the provided name
+        found_devices = [cam for cam in camera_infos if str(cam.get("name")) == name]
 
         if not found_devices:
-            available_names = [cam["name"] for cam in camera_infos]
+            available_names = [cam.get("name") for cam in camera_infos]
             raise ValueError(
                 f"No RealSense camera found with name '{name}'. Available camera names: {available_names}"
             )
 
         if len(found_devices) > 1:
-            serial_numbers = [dev["serial_number"] for dev in found_devices]
+            ids = [dev.get("id") for dev in found_devices]
             raise ValueError(
                 f"Multiple RealSense cameras found with name '{name}'. "
-                f"Please use a unique serial number instead. Found SNs: {serial_numbers}"
+                f"Please use a unique serial number instead. Found ids: {ids}"
             )
 
-        serial_number = str(found_devices[0]["serial_number"])
+        serial_number = str(found_devices[0].get("id"))
         return serial_number
 
     def _configure_rs_pipeline_config(self, rs_config: Any) -> None:

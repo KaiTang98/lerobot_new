@@ -98,13 +98,18 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     so100_follower,
     so101_follower,
+    robotiq,
+    denso_windows,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
+    quest,
+    bi_spacemouse,
     bi_so100_leader,
     homunculus,
     koch_leader,
+    spacemouse,
     make_teleoperator_from_config,
     so100_leader,
     so101_leader,
@@ -147,7 +152,7 @@ class DatasetRecordConfig:
     # Encode frames in the dataset into video
     video: bool = True
     # Upload dataset to Hugging Face hub.
-    push_to_hub: bool = True
+    push_to_hub: bool = False
     # Upload on private repository on the Hugging Face hub.
     private: bool = False
     # Add tags to your dataset on the hub.
