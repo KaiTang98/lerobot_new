@@ -104,9 +104,15 @@ class DensoWindows(Robot):
             "left_delta_x": float,
             "left_delta_y": float,
             "left_delta_z": float,
+            "left_delta_rx": float,
+            "left_delta_ry": float,
+            "left_delta_rz": float,
             "right_delta_x": float,
             "right_delta_y": float,
             "right_delta_z": float,
+            "right_delta_rx": float,
+            "right_delta_ry": float,
+            "right_delta_rz": float,
         }
         # Grippers are optional, so advertise but tolerate absence at runtime
         base["left_gripper"] = int
@@ -116,7 +122,7 @@ class DensoWindows(Robot):
     # -------------------- Connection lifecycle --------------------
     @property
     def is_connected(self) -> bool:
-        return self._is_connected
+        return self._is_connected and all(cam.is_connected for cam in self.cameras.values())
 
     def connect(self, calibrate: bool = True) -> None:
         if self._is_connected:
@@ -165,7 +171,7 @@ class DensoWindows(Robot):
         assert self._sock is not None
         sock = self._sock
         buf = ""
-        period = 1.0 / 40.0  # expected remote update rate
+        period = 1.0 / self.config.fps  # expected remote update rate
         try:
             while self._reader_stop is not None and not self._reader_stop.is_set():
                 rlist, _, _ = select.select([sock], [], [], period)
@@ -248,14 +254,38 @@ class DensoWindows(Robot):
         lx = float(action.get("left_delta_x", 0.0))
         ly = float(action.get("left_delta_y", 0.0))
         lz = float(action.get("left_delta_z", 0.0))
+        lrx = float(action.get("left_delta_rx", 0.0))
+        lry = float(action.get("left_delta_ry", 0.0))
+        lrz = float(action.get("left_delta_rz", 0.0))
+
         rx = float(action.get("right_delta_x", 0.0))
         ry = float(action.get("right_delta_y", 0.0))
         rz = float(action.get("right_delta_z", 0.0))
+        rrx = float(action.get("right_delta_rx", 0.0))
+        rry = float(action.get("right_delta_ry", 0.0))
+        rrz = float(action.get("right_delta_rz", 0.0))
+
         lg = int(action.get("left_gripper", 1))
         rg = int(action.get("right_gripper", 1))
 
         lbtn0, lbtn1 = self._gripper_int_to_buttons(lg)
         rbtn0, rbtn1 = self._gripper_int_to_buttons(rg)
+
+        # processing delta action [-1, 1]
+        lx = np.clip(lx, -1.0, 1.0)
+        ly = np.clip(ly, -1.0, 1.0)
+        lz = np.clip(lz, -1.0, 1.0)
+        lrx = np.clip(lrx, -1.0, 1.0)
+        lry = np.clip(lry, -1.0, 1.0)
+        lrz = np.clip(lrz, -1.0, 1.0)
+
+        rx = np.clip(rx, -1.0, 1.0)
+        ry = np.clip(ry, -1.0, 1.0)
+        rz = np.clip(rz, -1.0, 1.0)
+        rrx = np.clip(rrx, -1.0, 1.0)
+        
+        rry = np.clip(rry, -1.0, 1.0)
+        rrz = np.clip(rrz, -1.0, 1.0)
 
         # Windows side expects 6-DoF [x,y,z,roll,pitch,yaw]; we only send translations and zero the rest
         action_A = [lx, ly, 0.0, 0.0, 0.0, 0.0]
@@ -281,9 +311,15 @@ class DensoWindows(Robot):
             "left_delta_x": lx,
             "left_delta_y": ly,
             "left_delta_z": lz,
+            "left_delta_rx": lrx,
+            "left_delta_ry": lry,
+            "left_delta_rz": lrz,
             "right_delta_x": rx,
             "right_delta_y": ry,
             "right_delta_z": rz,
+            "right_delta_rx": rrx,
+            "right_delta_ry": rry,
+            "right_delta_rz": rrz,
             "left_gripper": lg,
             "right_gripper": rg,
             ACTION: act_vec,

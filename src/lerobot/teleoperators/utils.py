@@ -89,6 +89,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
         from .quest import BiQuestTeleop
 
         return BiQuestTeleop(config)
+    elif config.type == "bi_quest_haptics":
+        from .quest_haptics import BiQuestHapticsTeleop
+
+        return BiQuestHapticsTeleop(config)
 
     else:
         try:

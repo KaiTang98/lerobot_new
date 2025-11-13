@@ -105,6 +105,7 @@ from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
     quest,
+    quest_haptics,
     bi_spacemouse,
     bi_so100_leader,
     homunculus,
@@ -453,6 +454,123 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     with VideoEncodingManager(dataset):
         recorded_episodes = 0
         while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
+
+            # Connect to robot server
+            while True:
+                try:
+
+                    import socket, json
+                    SERVER_IP = "192.168.2.100"
+                    TASK_PORT = 12344
+                    RECV_BUFFER = 4096
+                    SOCKET_TIMEOUT = 1.0
+
+                    def send_init_flag(sock):
+                        """
+                        Send the initFlag=1 message as JSON with a trailing newline.
+                        """
+                        msg = {"initFlag": 1,
+                            "doubleinitFlag": 0
+                            }
+                        data = (json.dumps(msg) + "\n").encode("utf-8")
+                        sock.sendall(data)
+
+                    def send_doubleinit_flag(sock):
+                        """
+                        Send the doubleinitFlag=1 message as JSON with a trailing newline.
+                        """
+                        msg = {"initFlag": 0,
+                            "doubleinitFlag": 1
+                            }
+                        data = (json.dumps(msg) + "\n").encode("utf-8")
+                        sock.sendall(data)
+
+                    def send_clear_init_flag(sock):
+                        """
+                        Send the doubleinitFlag=1 message as JSON with a trailing newline.
+                        """
+                        msg = {"initFlag": 0,
+                            "doubleinitFlag": 0
+                            }
+                        data = (json.dumps(msg) + "\n").encode("utf-8")
+                        sock.sendall(data)
+
+                    def read_robot_init_flag(sock, buffer=b""):
+                        """
+                        Read from the socket until a full line is received.
+                        Parse JSON and return the value of "robot_init" (default None).
+                        Returns (flag, leftover_bytes).
+                        """
+                        try:
+                            chunk = sock.recv(RECV_BUFFER)
+                            if not chunk:
+                                # Connection closed
+                                return None, buffer
+                        except socket.timeout:
+                            return None, buffer
+
+                        buffer += chunk
+                        if b"\n" not in buffer:
+                            return None, buffer
+
+                        line, rest = buffer.split(b"\n", 1)
+                        try:
+                            msg = json.loads(line.decode("utf-8").strip())
+                            return msg.get("robot_init", None), rest
+                        except json.JSONDecodeError:
+                            return None, rest
+                    # 1) create socket and connect to server
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(SOCKET_TIMEOUT)
+                    sock.connect((SERVER_IP, TASK_PORT))
+                    print(f"[CLIENT] Connected to {SERVER_IP}:{TASK_PORT}")
+
+                    # 2) send the first initFlag
+                    send_init_flag(sock)
+                    print("[CLIENT] Sent initFlag=1, waiting for robot to acknowledge...")
+
+                    # 3) loop: send initFlag periodically and wait for robot_init==1
+                    while True:
+                        flag, buffer = read_robot_init_flag(sock)
+                        if flag == 1:
+                            print("[CLIENT] Received robot_init=1, start second handshake.")
+                            send_doubleinit_flag(sock)
+                            print("[CLIENT] Sent doubleinitFlag=1, waiting for robot to acknowledge...")
+
+                            while True:
+                                flag, buffer = read_robot_init_flag(sock)
+                                if flag == 0:
+                                    print("[CLIENT] Got robot initFlag reset, start the teleoperation loop.")
+                                    send_clear_init_flag(sock)
+                                    time.sleep(0.1)
+                                    break
+                                else:
+                                    send_doubleinit_flag(sock)
+                                    time.sleep(0.1)
+                            break
+                        else:
+                            send_init_flag(sock)
+                            time.sleep(0.1)
+                    # 4) close and exit
+                    sock.close()
+                    break
+
+                except (ConnectionRefusedError, socket.timeout) as e:
+                    print(f"[CLIENT] Connection failed ({e}), retrying in 1s...")
+                    try:
+                        sock.close()
+                    except:
+                        pass
+                    time.sleep(1)
+
+                except Exception as e:
+                    print(f"[CLIENT] Unexpected error: {e}")
+                    try:
+                        sock.close()
+                    except:
+                        pass
+
+
             log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
             record_loop(
                 robot=robot,
