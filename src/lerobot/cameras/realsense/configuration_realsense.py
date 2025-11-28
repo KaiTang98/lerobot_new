@@ -45,6 +45,11 @@ class RealSenseCameraConfig(CameraConfig):
         use_depth: Whether to enable depth stream. Defaults to False.
         rotation: Image rotation setting (0°, 90°, 180°, or 270°). Defaults to no rotation.
         warmup_s: Time reading frames before returning from connect (in seconds)
+        enable_auto_exposure: If True (default), the RGB camera uses auto-exposure.
+        exposure: Manual exposure value (microseconds) if auto-exposure is disabled.
+        gain: Manual gain value if auto-exposure is disabled.
+        enable_auto_white_balance: If True (default), the RGB camera uses auto white-balance.
+        white_balance: Manual white-balance value (Kelvin) if auto white-balance is disabled.
 
     Note:
         - Either name or serial_number must be specified.
@@ -58,6 +63,12 @@ class RealSenseCameraConfig(CameraConfig):
     use_depth: bool = False
     rotation: Cv2Rotation = Cv2Rotation.NO_ROTATION
     warmup_s: int = 1
+    # RGB camera exposure/white-balance controls
+    enable_auto_exposure: bool = False
+    exposure: int = 150
+    gain: int = 50
+    enable_auto_white_balance: bool = False
+    white_balance: int = 4700
 
     def __post_init__(self) -> None:
         if self.color_mode not in (ColorMode.RGB, ColorMode.BGR):

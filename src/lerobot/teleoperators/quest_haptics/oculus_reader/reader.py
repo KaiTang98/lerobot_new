@@ -63,11 +63,11 @@ class OculusReader:
         self.running = False
         if hasattr(self, 'thread'):
             self.thread.join()
-        # Attempt to force-stop the Android app so it doesn't keep running
-        try:
-            self.force_stop_app()
-        except Exception:
-            pass
+        # # Attempt to force-stop the Android app so it doesn't keep running
+        # try:
+        #     self.force_stop_app()
+        # except Exception:
+        #     pass
 
     def get_network_device(self, client, retry=0):
         try:

@@ -37,3 +37,6 @@ class BiQuestHapticsConfig(TeleoperatorConfig):
     # Deadzone for translation deltas
     deadzone_left: float = 0.0
     deadzone_right: float = 0.0
+
+    # Haptics settings
+    haptic_force_scale: float = 5.0

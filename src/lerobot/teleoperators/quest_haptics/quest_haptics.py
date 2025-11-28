@@ -34,23 +34,55 @@ class _Pose:
 	ts: float             # timestamp
 
 
-def _rotation_vector(R_rel: np.ndarray) -> np.ndarray:
-	"""Convert a relative rotation matrix to a Rodrigues rotation vector (rx, ry, rz).
+def _R_to_quaternion(R_rel: np.ndarray) -> np.ndarray:
+	"""Convert a rotation matrix to a quaternion (x, y, z, w).
 
-	Returns a 3-vector whose direction is the rotation axis and magnitude is the angle (radians).
-	Stable for small angles.
+	Uses SciPy if available; otherwise applies a numerically stable closed-form
+	conversion. Returns a float32 array of shape (4,).
 	"""
-	# Clamp numerical issues
-	tr = float(np.clip((np.trace(R_rel) - 1.0) / 2.0, -1.0, 1.0))
-	theta = np.arccos(tr)
-	if theta < 1e-6:
-		return np.zeros(3, dtype=np.float32)
-	denom = 2.0 * np.sin(theta)
-	rx = (R_rel[2, 1] - R_rel[1, 2]) / denom
-	ry = (R_rel[0, 2] - R_rel[2, 0]) / denom
-	rz = (R_rel[1, 0] - R_rel[0, 1]) / denom
-	axis = np.array([rx, ry, rz], dtype=np.float32)
-	return axis * float(theta)
+	R = np.asarray(R_rel, dtype=float)
+	# Fast path using SciPy
+	try:  # pragma: no cover
+		from scipy.spatial.transform import Rotation as _SciRot  # type: ignore
+		quat = _SciRot.from_matrix(R).as_quat()  # (x, y, z, w)
+		return np.asarray(quat, dtype=np.float32)
+	except Exception:
+		pass
+
+	# Fallback: explicit quaternion from rotation matrix.
+	m00, m01, m02 = R[0, 0], R[0, 1], R[0, 2]
+	m10, m11, m12 = R[1, 0], R[1, 1], R[1, 2]
+	m20, m21, m22 = R[2, 0], R[2, 1], R[2, 2]
+	trace = m00 + m11 + m22
+	if trace > 0.0:
+		s = np.sqrt(trace + 1.0) * 2.0  # s = 4*qw
+		qw = 0.25 * s
+		qx = (m21 - m12) / s
+		qy = (m02 - m20) / s
+		qz = (m10 - m01) / s
+	else:
+		if m00 > m11 and m00 > m22:
+			s = np.sqrt(1.0 + m00 - m11 - m22) * 2.0  # s = 4*qx
+			qw = (m21 - m12) / s
+			qx = 0.25 * s
+			qy = (m01 + m10) / s
+			qz = (m02 + m20) / s
+		elif m11 > m22:
+			s = np.sqrt(1.0 + m11 - m00 - m22) * 2.0  # s = 4*qy
+			qw = (m02 - m20) / s
+			qx = (m01 + m10) / s
+			qy = 0.25 * s
+			qz = (m12 + m21) / s
+		else:
+			s = np.sqrt(1.0 + m22 - m00 - m11) * 2.0  # s = 4*qz
+			qw = (m10 - m01) / s
+			qx = (m02 + m20) / s
+			qy = (m12 + m21) / s
+			qz = 0.25 * s
+	quat = np.array([qx, qy, qz, qw], dtype=np.float64)
+	# Normalize to guard against numerical drift
+	quat /= np.linalg.norm(quat) + 1e-12
+	return quat.astype(np.float32)
 
 
 class BiQuestHapticsTeleop(Teleoperator):
@@ -63,43 +95,94 @@ class BiQuestHapticsTeleop(Teleoperator):
 	Translation deltas are deadzoned by `deadzone_left/right`; rotation deltas are unfiltered.
 	"""
 
+
 	config_class = BiQuestHapticsConfig
 	name = "bi_quest_haptics"
+
 
 	def __init__(self, config: BiQuestHapticsConfig):
 		super().__init__(config)
 		self.config = config
 		self._reader = None  # OculusReader instance
 		self._connected = False
-		self._last_left: _Pose | None = None
-		self._last_right: _Pose | None = None
+		self._init_left: _Pose | None = None
+		self._init_right: _Pose | None = None
+		self._clear_init_poses()
+
+		# # Activation and reference transforms for relative motion
+		self._teleop_flag_left: bool = False
+		self._teleop_flag_right: bool = False
+		# self._init_operation_T_left: np.ndarray | None = None
+		# self._init_operation_T_right: np.ndarray | None = None
+
 
 	# --- Teleoperator API ---
 	@property
 	def action_features(self) -> dict:
-		# 12 DoF deltas (translation + rotation) + 4 button states (boolean as 0/1)
+	
+		# 46 DoF (positions + quaternions + buttons/axes)
 		return {
 			"dtype": "float32",
-			"shape": (16,),
+			"shape": (48,),
 			"names": {
-				"left_delta_x": 0,
-				"left_delta_y": 1,
-				"left_delta_z": 2,
-				"left_delta_rx": 3,
-				"left_delta_ry": 4,
-				"left_delta_rz": 5,
-				"right_delta_x": 6,
-				"right_delta_y": 7,
-				"right_delta_z": 8,
-				"right_delta_rx": 9,
-				"right_delta_ry": 10,
-				"right_delta_rz": 11,
-				"left_X": 12,
-				"left_Y": 13,
-				"right_A": 14,
-				"right_B": 15,
+				# Position and orientation (quaternion) of left controller
+				"l_x": 0,
+				"l_y": 1,
+				"l_z": 2,
+				"l_qx": 3,
+				"l_qy": 4,
+				"l_qz": 5,
+				"l_qw": 6,
+				"l_i_x": 7,
+				"l_i_y": 8,
+				"l_i_z": 9,
+				"l_i_qx": 10,
+				"l_i_qy": 11,
+				"l_i_qz": 12,
+				"l_i_qw": 13,
+
+				# Position and orientation (quaternion) of right controller
+				"r_x": 14,
+				"r_y": 15,
+				"r_z": 16,
+				"r_qx": 17,
+				"r_qy": 18,
+				"r_qz": 19,
+				"r_qw": 20,
+				"r_i_x": 21,
+				"r_i_y": 22,
+				"r_i_z": 23,
+				"r_i_qx": 24,
+				"r_i_qy": 25,
+				"r_i_qz": 26,
+				"r_i_qw": 27,
+
+				# Joystick and trigger states
+				"l_joystick_x": 28,
+				"l_joystick_y": 29,
+				"l_trigger_up": 30,
+				"l_trigger_down": 31,
+				"r_joystick_x": 32,
+				"r_joystick_y": 33,
+				"r_trigger_up": 34,
+				"r_trigger_down": 35,
+
+				# Button states
+				"l_X": 36,
+				"l_Y": 37,
+				"l_joystick_press": 38,
+				"l_trigger_up_press": 39,
+				"l_trigger_down_press": 40,
+				"r_A": 41,
+				"r_B": 42,
+				"r_joystick_press": 43,
+				"r_trigger_up_press": 44,
+				"r_trigger_down_press": 45,
+				"l_teleop_active": 46,
+				"r_teleop_active": 47,
 			},
 		}
+
 
 	@property
 	def feedback_features(self) -> dict:
@@ -110,9 +193,11 @@ class BiQuestHapticsTeleop(Teleoperator):
 			"names": {"left_haptic_amp": 0, "right_haptic_amp": 1},
 		}
 
+
 	@property
 	def is_connected(self) -> bool:
 		return self._connected
+
 
 	def connect(self, calibrate: bool = True) -> None:
 		if self.is_connected:
@@ -136,99 +221,157 @@ class BiQuestHapticsTeleop(Teleoperator):
 			ok_right = ok_right or ('r' in transforms and isinstance(transforms.get('r'), np.ndarray))
 			if ok_left and ok_right:
 				break
-			time.sleep(0.01)
+			time.sleep(0.1)
 		if not (ok_left and ok_right):
 			self.disconnect()
 			raise RuntimeError("Failed to receive initial transforms from both Quest controllers.")
 
-		self._refresh_last_poses()
+		self._clear_init_poses()
 		self._connected = True
+
 
 	@property
 	def is_calibrated(self) -> bool:
 		return True
 
+
 	def calibrate(self) -> None:  # simple baseline reset
 		self._refresh_last_poses()
+
 
 	def configure(self) -> None:
 		return None
 
-	def _refresh_last_poses(self) -> None:
-		assert self._reader is not None
-		transforms, _ = self._reader.get_transformations_and_buttons()
-		now = time.perf_counter()
-		if 'l' in transforms and isinstance(transforms['l'], np.ndarray):
-			Tl = np.asarray(transforms['l'], dtype=np.float32)
-			self._last_left = _Pose(t=Tl[:3, 3].copy(), R=Tl[:3, :3].copy(), ts=now)
-		if 'r' in transforms and isinstance(transforms['r'], np.ndarray):
-			Tr = np.asarray(transforms['r'], dtype=np.float32)
-			self._last_right = _Pose(t=Tr[:3, 3].copy(), R=Tr[:3, :3].copy(), ts=now)
 
-	def _proc_translation(self, d: np.ndarray, dz: float) -> np.ndarray:
-		x, y, z = map(float, d[:3])
-		def dzf(a: float) -> float:
-			return 0.0 if abs(a) < dz else a
-		return np.array([dzf(x), dzf(y), dzf(z)], dtype=np.float32)
+	# def _refresh_last_poses(self) -> None:
+	# 	assert self._reader is not None
+	# 	transforms, _ = self._reader.get_transformations_and_buttons()
+	# 	now = time.perf_counter()
+	# 	if 'l' in transforms and isinstance(transforms['l'], np.ndarray):
+	# 		Tl = np.asarray(transforms['l'], dtype=np.float32)
+	# 		self._last_left = _Pose(t=Tl[:3, 3].copy(), R=Tl[:3, :3].copy(), ts=now)
+	# 	if 'r' in transforms and isinstance(transforms['r'], np.ndarray):
+	# 		Tr = np.asarray(transforms['r'], dtype=np.float32)
+	# 		self._last_right = _Pose(t=Tr[:3, 3].copy(), R=Tr[:3, :3].copy(), ts=now)
+
+
+	def _clear_init_poses(self) -> None:
+		self._init_left = None
+		self._init_right = None
+
 
 	def get_action(self) -> dict[str, Any]:
 		if not self.is_connected:
 			raise DeviceNotConnectedError("BiQuestHaptics is not connected. Call connect() first.")
 		assert self._reader is not None
+
 		transforms, buttons = self._reader.get_transformations_and_buttons()
 		now = time.perf_counter()
 		out: dict[str, Any] = {}
 
-		# Left
+		# Left controller absolute pose (position + quaternion) and initial reference
 		if 'l' in transforms and isinstance(transforms['l'], np.ndarray):
 			Tl = np.asarray(transforms['l'], dtype=np.float32)
-			t_l = Tl[:3, 3]; R_l = Tl[:3, :3]
-			if self._last_left is None:
-				self._last_left = _Pose(t=t_l.copy(), R=R_l.copy(), ts=now)
-			d_t = t_l - self._last_left.t
-			R_rel = R_l @ self._last_left.R.T
-			d_r = _rotation_vector(R_rel)
-			self._last_left = _Pose(t=t_l.copy(), R=R_l.copy(), ts=now)
-			d_t = self._proc_translation(d_t, self.config.deadzone_left)
-			out["left_delta_x"], out["left_delta_y"], out["left_delta_z"] = map(float, d_t)
-			out["left_delta_rx"], out["left_delta_ry"], out["left_delta_rz"] = map(float, d_r)
+			pos_l = Tl[:3, 3]
+			R_l = Tl[:3, :3]
+			quat_l = _R_to_quaternion(R_l)  # (qx,qy,qz,qw)
+			out["l_x"], out["l_y"], out["l_z"] = map(float, pos_l)
+			out["l_qx"], out["l_qy"], out["l_qz"], out["l_qw"] = map(float, quat_l)
 		else:
-			for k in ("left_delta_x","left_delta_y","left_delta_z","left_delta_rx","left_delta_ry","left_delta_rz"):
+			for k in ("l_x","l_y","l_z","l_qx","l_qy","l_qz","l_qw","l_i_x","l_i_y","l_i_z","l_i_qx","l_i_qy","l_i_qz","l_i_qw"):
 				out[k] = 0.0
 
-		# Right
+		# Right controller absolute pose
 		if 'r' in transforms and isinstance(transforms['r'], np.ndarray):
 			Tr = np.asarray(transforms['r'], dtype=np.float32)
-			t_r = Tr[:3, 3]; R_r = Tr[:3, :3]
-			if self._last_right is None:
-				self._last_right = _Pose(t=t_r.copy(), R=R_r.copy(), ts=now)
-			d_t = t_r - self._last_right.t
-			R_rel = R_r @ self._last_right.R.T
-			d_r = _rotation_vector(R_rel)
-			self._last_right = _Pose(t=t_r.copy(), R=R_r.copy(), ts=now)
-			d_t = self._proc_translation(d_t, self.config.deadzone_right)
-			out["right_delta_x"], out["right_delta_y"], out["right_delta_z"] = map(float, d_t)
-			out["right_delta_rx"], out["right_delta_ry"], out["right_delta_rz"] = map(float, d_r)
+			pos_r = Tr[:3, 3]
+			R_r = Tr[:3, :3]
+			quat_r = _R_to_quaternion(R_r)
+			out["r_x"], out["r_y"], out["r_z"] = map(float, pos_r)
+			out["r_qx"], out["r_qy"], out["r_qz"], out["r_qw"] = map(float, quat_r)
 		else:
-			for k in ("right_delta_x","right_delta_y","right_delta_z","right_delta_rx","right_delta_ry","right_delta_rz"):
+			for k in ("r_x","r_y","r_z","r_qx","r_qy","r_qz","r_qw","r_i_x","r_i_y","r_i_z","r_i_qx","r_i_qy","r_i_qz","r_i_qw"):
 				out[k] = 0.0
 
+		# Left controller button states (boolean to float 0/1)
+		out["l_X"] = 1.0 if bool(buttons.get("X", False)) else 0.0
+		out["l_Y"] = 1.0 if bool(buttons.get("Y", False)) else 0.0
+		out["l_joystick_press"] = 1.0 if bool(buttons.get("joystick", False)) else 0.0
+		out["l_trigger_up_press"] = 1.0 if bool(buttons.get("trigger_up", False)) else 0.0
+		out["l_trigger_down_press"] = 1.0 if bool(buttons.get("trigger_down", False)) else 0.0
+		
+		# Right controller button states	
+		out["r_A"] = 1.0 if bool(buttons.get("A", False)) else 0.0
+		out["r_B"] = 1.0 if bool(buttons.get("B", False)) else 0.0
+		out["r_joystick_press"] = 1.0 if bool(buttons.get("joystick", False)) else 0.0
+		out["r_trigger_up_press"] = 1.0 if bool(buttons.get("trigger_up", False)) else 0.0
+		out["r_trigger_down_press"] = 1.0 if bool(buttons.get("trigger_down", False)) else 0.0
 
-		# Button states (boolean to float 0/1)
-		out["left_X"] = 1.0 if bool(buttons.get("X", False)) else 0.0
-		out["left_Y"] = 1.0 if bool(buttons.get("Y", False)) else 0.0
-		out["right_A"] = 1.0 if bool(buttons.get("A", False)) else 0.0
-		out["right_B"] = 1.0 if bool(buttons.get("B", False)) else 0.0
+		# when "l_X" is pressed, start left controller pose control, store initial pose
+		if out["l_X"] == 1.0:
+			self._teleop_flag_left = True
+			if self._init_left is None:
+				if 'l' in transforms and isinstance(transforms['l'], np.ndarray):
+					Tl = np.asarray(transforms['l'], dtype=np.float32)
+					self._init_left = _Pose(t=Tl[:3, 3].copy(), R=Tl[:3, :3].copy(), ts=now)
+
+		# when "r_A" is pressed, start right controller pose control, store initial pose
+		if out["r_A"] == 1.0:
+			self._teleop_flag_right = True
+			if self._init_right is None:
+				if 'r' in transforms and isinstance(transforms['r'], np.ndarray):
+					Tr = np.asarray(transforms['r'], dtype=np.float32)
+					self._init_right = _Pose(t=Tr[:3, 3].copy(), R=Tr[:3, :3].copy(), ts=now)
+
+		if self._teleop_flag_left:
+			out["l_teleop_active"] = 1.0
+		if self._teleop_flag_right:
+			out["r_teleop_active"] = 1.0
+
+		# send the initial reference poses if available
+		if self._init_left is not None:
+			out["l_i_x"], out["l_i_y"], out["l_i_z"] = map(float, self._init_left.t)
+			quat_init_l = _R_to_quaternion(self._init_left.R)
+			out["l_i_qx"], out["l_i_qy"], out["l_i_qz"], out["l_i_qw"] = map(float, quat_init_l)
+		else:
+			for k in ("l_i_x","l_i_y","l_i_z","l_i_qx","l_i_qy","l_i_qz","l_i_qw"):
+				out[k] = 0.0
+
+		if self._init_right is not None:
+			out["r_i_x"], out["r_i_y"], out["r_i_z"] = map(float, self._init_right.t)
+			quat_init_r = _R_to_quaternion(self._init_right.R)
+			out["r_i_qx"], out["r_i_qy"], out["r_i_qz"], out["r_i_qw"] = map(float, quat_init_r)
+		else:
+			for k in ("r_i_x","r_i_y","r_i_z","r_i_qx","r_i_qy","r_i_qz","r_i_qw"):
+				out[k] = 0.0
+
+		# clear initial poses when "l_Y" is pressed
+		if out["l_Y"] == 1.0:
+			self._init_left = None
+			self._teleop_flag_left = False
+		if out["r_B"] == 1.0:
+			self._init_right = None
+			self._teleop_flag_right = False
 
 		return out
+
 
 	def send_feedback(self, feedback: dict[str, Any]) -> None:
 		# Expect optional 'left_haptic_amp' and 'right_haptic_amp'
 		if not self.is_connected or self._reader is None:
 			return None
 		try:
-			amp_l = float(feedback.get("left_haptic_amp", 0.0))
-			amp_r = float(feedback.get("right_haptic_amp", 0.0))
+			fx_left = float(feedback.get("curFT_x_A", 0.0))
+			fy_left = float(feedback.get("curFT_y_A", 0.0))
+			fz_left = float(feedback.get("curFT_z_A", 0.0))
+			fx_right = float(feedback.get("curFT_x_B", 0.0))
+			fy_right = float(feedback.get("curFT_y_B", 0.0))
+			fz_right = float(feedback.get("curFT_z_B", 0.0))
+
+			amp_l = np.clip(np.max([abs(fx_left), abs(fy_left), abs(fz_left)]) / self.config.haptic_force_scale, 0.0, 1.0)
+			amp_r = np.clip(np.max([abs(fx_right), abs(fy_right), abs(fz_right)]) / self.config.haptic_force_scale, 0.0, 1.0)
+			# amp_l = float(feedback.get("left_haptic_amp", 0.0))
+			# amp_r = float(feedback.get("right_haptic_amp", 0.0))
 		except Exception:
 			return None
 		try:
@@ -241,20 +384,16 @@ class BiQuestHapticsTeleop(Teleoperator):
 			pass
 		return None
 
+
 	def disconnect(self) -> None:
 		if self._reader is not None:
 			try:
 				self._reader.stop()
 			except Exception:
 				pass
-			# Ensure the Android app is closed as well
-			try:
-				if hasattr(self._reader, "force_stop_app"):
-					self._reader.force_stop_app()
-			except Exception:
-				pass
 			self._reader = None
 		self._connected = False
+
 
 	def get_teleop_events(self) -> dict[str, Any]:
 		if not self.is_connected:

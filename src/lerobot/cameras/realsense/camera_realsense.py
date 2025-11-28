@@ -207,6 +207,53 @@ class RealSenseCamera(Camera):
 
         self._configure_capture_settings()
 
+        # Optional: configure RGB sensor exposure and white-balance options
+        try:
+            dev = self.rs_profile.get_device()  # type: ignore[union-attr]
+            sensors = dev.query_sensors()
+            color_sensor = None
+            for s in sensors:
+                try:
+                    if s.get_info(rs.camera_info.name) == "RGB Camera":  # type: ignore[name-defined]
+                        color_sensor = s
+                        break
+                except Exception:
+                    continue
+
+            if color_sensor is not None:
+                # Auto-exposure toggle
+                try:
+                    if color_sensor.supports(rs.option.enable_auto_exposure):  # type: ignore[name-defined]
+                        color_sensor.set_option(
+                            rs.option.enable_auto_exposure, 1.0 if self.config.enable_auto_exposure else 0.0
+                        )
+                    if not self.config.enable_auto_exposure:
+                        if self.config.exposure is not None and color_sensor.supports(rs.option.exposure):
+                            color_sensor.set_option(rs.option.exposure, float(self.config.exposure))
+                        if self.config.gain is not None and color_sensor.supports(rs.option.gain):
+                            color_sensor.set_option(rs.option.gain, float(self.config.gain))
+                except Exception:
+                    # Non-fatal: continue without forcing exposure options
+                    pass
+
+                # Auto white-balance toggle
+                try:
+                    if color_sensor.supports(rs.option.enable_auto_white_balance):  # type: ignore[name-defined]
+                        color_sensor.set_option(
+                            rs.option.enable_auto_white_balance,
+                            1.0 if self.config.enable_auto_white_balance else 0.0,
+                        )
+                    if not self.config.enable_auto_white_balance:
+                        if self.config.white_balance is not None and color_sensor.supports(rs.option.white_balance):
+                            # Some devices require values in steps of 100; driver will clamp if needed.
+                            color_sensor.set_option(rs.option.white_balance, float(self.config.white_balance))
+                except Exception:
+                    # Non-fatal
+                    pass
+        except Exception:
+            # If sensor inspection fails, do not block camera usage.
+            pass
+
         if warmup:
             time.sleep(
                 1
@@ -553,16 +600,22 @@ class RealSenseCamera(Camera):
         if self.thread is None or not self.thread.is_alive():
             self._start_read_thread()
 
+        # Fast path: return the most recent frame immediately if available.
+        with self.frame_lock:
+            frame = self.latest_frame
+        if frame is not None:
+            return frame
+
+        # First-frame fallback: wait up to timeout for the background thread to populate.
         if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
             thread_alive = self.thread is not None and self.thread.is_alive()
             raise TimeoutError(
-                f"Timed out waiting for frame from camera {self} after {timeout_ms} ms. "
+                f"Timed out waiting for first frame from camera {self} after {timeout_ms} ms. "
                 f"Read thread alive: {thread_alive}."
             )
 
         with self.frame_lock:
             frame = self.latest_frame
-            self.new_frame_event.clear()
 
         if frame is None:
             raise RuntimeError(f"Internal error: Event set but no frame available for {self}.")

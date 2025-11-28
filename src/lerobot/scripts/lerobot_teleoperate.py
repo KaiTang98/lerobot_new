@@ -67,6 +67,7 @@ from lerobot.processor import (
     RobotProcessorPipeline,
     make_default_processors,
 )
+from lerobot.processor.factory import make_teleop_robot_processors
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
@@ -77,6 +78,7 @@ from lerobot.robots import (  # noqa: F401
     so100_follower,
     so101_follower,
     robotiq,
+    denso_windows,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -91,6 +93,7 @@ from lerobot.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     so100_leader,
     so101_leader,
+    quest_haptics,
 )
 from lerobot.utils.import_utils import register_third_party_devices
 from lerobot.utils.robot_utils import busy_wait
@@ -160,6 +163,8 @@ def teleop_loop(
         # Send processed action to robot (robot_action_processor.to_output should return dict[str, Any])
         _ = robot.send_action(robot_action_to_send)
 
+        teleop.send_feedback(obs)
+
         if display_data:
             # Process robot observation through pipeline
             obs_transition = robot_observation_processor(obs)
@@ -169,12 +174,12 @@ def teleop_loop(
                 action=teleop_action,
             )
 
-            print("\n" + "-" * (display_len + 10))
-            print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-            # Display the final robot action that was sent
-            for motor, value in robot_action_to_send.items():
-                print(f"{motor:<{display_len}} | {value:>7.2f}")
-            move_cursor_up(len(robot_action_to_send) + 5)
+            # print("\n" + "-" * (display_len + 10))
+            # print(f"{'NAME':<{display_len}} | {'NORM':>7}")
+            # # Display the final robot action that was sent
+            # for motor, value in robot_action_to_send.items():
+            #     print(f"{motor:<{display_len}} | {value:>7.2f}")
+            # move_cursor_up(len(robot_action_to_send) + 5)
 
         dt_s = time.perf_counter() - loop_start
         busy_wait(1 / fps - dt_s)
@@ -194,10 +199,126 @@ def teleoperate(cfg: TeleoperateConfig):
 
     teleop = make_teleoperator_from_config(cfg.teleop)
     robot = make_robot_from_config(cfg.robot)
-    teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+
+    teleop_action_processor, robot_action_processor, robot_observation_processor = make_teleop_robot_processors(teleopConfig=cfg.teleop, robotConfig=cfg.robot)
 
     teleop.connect()
     robot.connect()
+
+    # Connect to robot server
+    while False:
+        try:
+
+            import socket, json
+            SERVER_IP = "192.168.2.100"
+            TASK_PORT = 12344
+            RECV_BUFFER = 4096
+            SOCKET_TIMEOUT = 1.0
+
+            def send_init_flag(sock):
+                """
+                Send the initFlag=1 message as JSON with a trailing newline.
+                """
+                msg = {"initFlag": 1,
+                    "doubleinitFlag": 0
+                    }
+                data = (json.dumps(msg) + "\n").encode("utf-8")
+                sock.sendall(data)
+
+            def send_doubleinit_flag(sock):
+                """
+                Send the doubleinitFlag=1 message as JSON with a trailing newline.
+                """
+                msg = {"initFlag": 0,
+                    "doubleinitFlag": 1
+                    }
+                data = (json.dumps(msg) + "\n").encode("utf-8")
+                sock.sendall(data)
+
+            def send_clear_init_flag(sock):
+                """
+                Send the doubleinitFlag=1 message as JSON with a trailing newline.
+                """
+                msg = {"initFlag": 0,
+                    "doubleinitFlag": 0
+                    }
+                data = (json.dumps(msg) + "\n").encode("utf-8")
+                sock.sendall(data)
+
+            def read_robot_init_flag(sock, buffer=b""):
+                """
+                Read from the socket until a full line is received.
+                Parse JSON and return the value of "robot_init" (default None).
+                Returns (flag, leftover_bytes).
+                """
+                try:
+                    chunk = sock.recv(RECV_BUFFER)
+                    if not chunk:
+                        # Connection closed
+                        return None, buffer
+                except socket.timeout:
+                    return None, buffer
+
+                buffer += chunk
+                if b"\n" not in buffer:
+                    return None, buffer
+
+                line, rest = buffer.split(b"\n", 1)
+                try:
+                    msg = json.loads(line.decode("utf-8").strip())
+                    return msg.get("robot_init", None), rest
+                except json.JSONDecodeError:
+                    return None, rest
+            # 1) create socket and connect to server
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(SOCKET_TIMEOUT)
+            sock.connect((SERVER_IP, TASK_PORT))
+            print(f"[CLIENT] Connected to {SERVER_IP}:{TASK_PORT}")
+
+            # 2) send the first initFlag
+            send_init_flag(sock)
+            print("[CLIENT] Sent initFlag=1, waiting for robot to acknowledge...")
+
+            # 3) loop: send initFlag periodically and wait for robot_init==1
+            while True:
+                flag, buffer = read_robot_init_flag(sock)
+                if flag == 1:
+                    print("[CLIENT] Received robot_init=1, start second handshake.")
+                    send_doubleinit_flag(sock)
+                    print("[CLIENT] Sent doubleinitFlag=1, waiting for robot to acknowledge...")
+
+                    while True:
+                        flag, buffer = read_robot_init_flag(sock)
+                        if flag == 0:
+                            print("[CLIENT] Got robot initFlag reset, start the teleoperation loop.")
+                            send_clear_init_flag(sock)
+                            time.sleep(0.1)
+                            break
+                        else:
+                            send_doubleinit_flag(sock)
+                            time.sleep(0.1)
+                    break
+                else:
+                    send_init_flag(sock)
+                    time.sleep(0.1)
+            # 4) close and exit
+            sock.close()
+            break
+
+        except (ConnectionRefusedError, socket.timeout) as e:
+            print(f"[CLIENT] Connection failed ({e}), retrying in 1s...")
+            try:
+                sock.close()
+            except:
+                pass
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"[CLIENT] Unexpected error: {e}")
+            try:
+                sock.close()
+            except:
+                pass
 
     try:
         teleop_loop(

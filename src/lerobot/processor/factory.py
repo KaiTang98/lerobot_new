@@ -14,6 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from lerobot.robots import denso_windows, denso_deltapose
+from lerobot.robots.config import RobotConfig
+from lerobot.teleoperators import quest_haptics
+from lerobot.teleoperators.config import TeleoperatorConfig
 from .converters import (
     observation_to_transition,
     robot_action_observation_to_transition,
@@ -22,8 +26,42 @@ from .converters import (
 )
 from .core import RobotAction, RobotObservation
 from .pipeline import IdentityProcessorStep, RobotProcessorPipeline
+from .quest_haptics_denso_windows_robot_action_step import QuestHapticsDensoWindowsRobotActionStep
+from .quest_haptics_denso_deltapose_robot_action_step import QuestHapticsDensoDeltaPoseRobotActionStep
 
 
+# ---------------------------------------------
+# ------ robot observation processor ----------
+# ---------------------------------------------
+def make_default_robot_observation_processor() -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
+    robot_observation_processor = RobotProcessorPipeline[RobotObservation, RobotObservation](
+        steps=[IdentityProcessorStep()],
+        to_transition=observation_to_transition,
+        to_output=transition_to_observation,
+    )
+    return robot_observation_processor
+
+
+def make_questhaptics_densowindows_robot_observation_processor() -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
+    robot_observation_processor = RobotProcessorPipeline[RobotObservation, RobotObservation](
+        steps=[IdentityProcessorStep()],
+        to_transition=observation_to_transition,
+        to_output=transition_to_observation,
+    )
+    return robot_observation_processor
+
+def make_questhaptics_densodeltapose_robot_observation_processor() -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
+    robot_observation_processor = RobotProcessorPipeline[RobotObservation, RobotObservation](
+        steps=[IdentityProcessorStep()],
+        to_transition=observation_to_transition,
+        to_output=transition_to_observation,
+    )
+    return robot_observation_processor
+
+
+# ---------------------------------------------
+# ------- teleoperation action processor ------
+# ---------------------------------------------
 def make_default_teleop_action_processor() -> RobotProcessorPipeline[
     tuple[RobotAction, RobotObservation], RobotAction
 ]:
@@ -35,6 +73,30 @@ def make_default_teleop_action_processor() -> RobotProcessorPipeline[
     return teleop_action_processor
 
 
+def make_questhaptics_densowindows_teleop_action_processor() -> RobotProcessorPipeline[
+    tuple[RobotAction, RobotObservation], RobotAction
+]:
+    teleop_action_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
+        steps=[IdentityProcessorStep()],
+        to_transition=robot_action_observation_to_transition,
+        to_output=transition_to_robot_action,
+    )
+    return teleop_action_processor
+
+def make_questhaptics_densodeltapose_teleop_action_processor() -> RobotProcessorPipeline[
+    tuple[RobotAction, RobotObservation], RobotAction
+]:
+    teleop_action_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
+        steps=[IdentityProcessorStep()],
+        to_transition=robot_action_observation_to_transition,
+        to_output=transition_to_robot_action,
+    )
+    return teleop_action_processor
+
+
+# ---------------------------------------------
+# ------- robot action processor --------------
+# ---------------------------------------------
 def make_default_robot_action_processor() -> RobotProcessorPipeline[
     tuple[RobotAction, RobotObservation], RobotAction
 ]:
@@ -45,18 +107,60 @@ def make_default_robot_action_processor() -> RobotProcessorPipeline[
     )
     return robot_action_processor
 
-
-def make_default_robot_observation_processor() -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
-    robot_observation_processor = RobotProcessorPipeline[RobotObservation, RobotObservation](
-        steps=[IdentityProcessorStep()],
-        to_transition=observation_to_transition,
-        to_output=transition_to_observation,
+def make_questhaptics_densowindows_robot_action_processor() -> RobotProcessorPipeline[
+    tuple[RobotAction, RobotObservation], RobotAction
+]:
+    robot_action_processor  = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
+        steps=[QuestHapticsDensoWindowsRobotActionStep(clamp=1.0, deadzone=1.0)],
+        to_transition=robot_action_observation_to_transition,
+        to_output=transition_to_robot_action,
     )
-    return robot_observation_processor
+    return robot_action_processor
 
+def make_questhaptics_densodeltapose_robot_action_processor() -> RobotProcessorPipeline[
+    tuple[RobotAction, RobotObservation], RobotAction
+]:
+    robot_action_processor  = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
+        steps=[QuestHapticsDensoDeltaPoseRobotActionStep(scale_mm=1000.0, deadzone=1.0)],
+        to_transition=robot_action_observation_to_transition,
+        to_output=transition_to_robot_action,
+    )
+    return robot_action_processor
+
+
+# ---------------------------------------------
+# ------ teleop-robot processor factory -------
+# ---------------------------------------------
+def make_teleop_robot_processors(robotConfig: RobotConfig,
+                                 teleopConfig: TeleoperatorConfig | None):
+
+    # Determine teleop processors
+    if teleopConfig is not None and teleopConfig.type == "bi_quest_haptics" and robotConfig.type == "denso_windows":
+        return make_questhaptics_densowindows_processor()
+    if teleopConfig is not None and teleopConfig.type == "bi_quest_haptics" and robotConfig.type == "denso_deltapose":
+        return make_questhaptics_densodeltapose_processor()
+    
+    else:
+        return make_default_processors()
 
 def make_default_processors():
     teleop_action_processor = make_default_teleop_action_processor()
     robot_action_processor = make_default_robot_action_processor()
     robot_observation_processor = make_default_robot_observation_processor()
+    return (teleop_action_processor, robot_action_processor, robot_observation_processor)
+
+
+def make_questhaptics_densowindows_processor():
+
+    robot_observation_processor = make_questhaptics_densowindows_robot_observation_processor()
+    teleop_action_processor = make_questhaptics_densowindows_teleop_action_processor()
+    robot_action_processor = make_questhaptics_densowindows_robot_action_processor()
+    return (teleop_action_processor, robot_action_processor, robot_observation_processor)
+
+
+def make_questhaptics_densodeltapose_processor():
+    # For the delta-pose robot, convert Quest absolute to deltapose_* via dedicated step.
+    robot_observation_processor = make_questhaptics_densodeltapose_robot_observation_processor()
+    teleop_action_processor = make_questhaptics_densodeltapose_teleop_action_processor()
+    robot_action_processor = make_questhaptics_densodeltapose_robot_action_processor()
     return (teleop_action_processor, robot_action_processor, robot_observation_processor)

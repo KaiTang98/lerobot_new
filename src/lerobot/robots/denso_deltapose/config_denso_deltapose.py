@@ -21,10 +21,10 @@ from lerobot.cameras.configs import CameraConfig
 from ..config import RobotConfig
 
 
-@RobotConfig.register_subclass("denso_windows")
+@RobotConfig.register_subclass("denso_deltapose")
 @dataclass(kw_only=True)
-class DensoWindowsConfig(RobotConfig):
-    """Config for a Denso manipulator proxied via a Windows PC.
+class DensoDeltaPoseConfig(RobotConfig):
+    """Config for Denso delta-pose client proxied via a Windows PC.
 
     The Linux client connects over TCP to a Windows host that performs the
     low-level robot control and state reporting. This config provides the
@@ -40,7 +40,3 @@ class DensoWindowsConfig(RobotConfig):
 
     # Optional local cameras to record alongside robot state
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
-
-    # Include flat OBS_STATE vector in observations (some policies/processors expect this).
-    # Set to False if you only consume named fields and don't want the extra array.
-    include_flat_obs_state: bool = False

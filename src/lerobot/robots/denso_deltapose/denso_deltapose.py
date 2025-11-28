@@ -25,29 +25,28 @@ from typing import Any
 import numpy as np
 
 from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.utils.constants import ACTION, OBS_STATE
+from lerobot.utils.constants import ACTION
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..robot import Robot
-from .config_denso_windows import DensoWindowsConfig
+from .config_denso_deltapose import DensoDeltaPoseConfig
 
 
-class DensoWindows(Robot):
-    """Denso manipulator controlled by a remote Windows host over TCP.
+class DensoDeltaPose(Robot):
+    """Denso manipulator client that forwards delta-pose commands directly.
 
-    This client forwards teleoperation/inference actions to the Windows PC,
-    and receives robot state (and possibly auxiliary signals) as JSON lines.
+    This mirrors the Windows TCP protocol used by `DensoWindows`, but the action schema
+    here is explicit delta pose for each arm (A=left, B=right):
+      - deltapose_l_[x,y,z,rx,ry,rz], deltapose_r_[x,y,z,rx,ry,rz]
+      - start_A/end_A, start_B/end_B (latching flags managed host-side if needed)
 
-    Expected teleop action keys (from Bi-Spacemouse):
-      - left_delta_x/y/z, right_delta_x/y/z, optional left_gripper/right_gripper (0 close,1 stay,2 open)
-
-    Observation includes a flat vector under OBS_STATE and any configured camera frames.
+    Observations expose the named scalar state and any configured camera frames.
     """
 
-    config_class = DensoWindowsConfig
-    name = "denso_windows"
+    config_class = DensoDeltaPoseConfig
+    name = "denso_deltapose"
 
-    def __init__(self, config: DensoWindowsConfig):
+    def __init__(self, config: DensoDeltaPoseConfig):
         super().__init__(config)
         self.config = config
 
@@ -63,14 +62,6 @@ class DensoWindows(Robot):
         self._last_remote_state: dict[str, Any] = {}
 
         self._is_connected: bool = False
-        # Teleoperation activation (separate A=left, B=right)
-        self._teleop_active_A = False
-        self._teleop_active_B = False
-
-        # Cached initial pose fields (persist across frames while teleop active)
-        self._init_pose_A: dict[str, float] = {}
-        self._init_pose_B: dict[str, float] = {}
-        
 
     # -------------------- Feature descriptors --------------------
     @cached_property
@@ -91,10 +82,6 @@ class DensoWindows(Robot):
             "curPos_x_B", "curPos_y_B", "curPos_z_B", "curPos_roll_B", "curPos_pitch_B", "curPos_yaw_B",
             "curFT_x_B", "curFT_y_B", "curFT_z_B", "curFT_roll_B", "curFT_pitch_B", "curFT_yaw_B",
             "curTask_B",
-            # A initial pose reference (6)
-            "initPos_x_A", "initPos_y_A", "initPos_z_A", "initPos_roll_A", "initPos_pitch_A", "initPos_yaw_A",
-            # B initial pose reference (6)
-            "initPos_x_B", "initPos_y_B", "initPos_z_B", "initPos_roll_B", "initPos_pitch_B", "initPos_yaw_B",
         ]
         return dict.fromkeys(keys, float)
 
@@ -104,17 +91,17 @@ class DensoWindows(Robot):
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple[int, int, int]]:
-        # Like LeKiwiClient, we expose named state scalars and camera frames; OBS_STATE vector is added at runtime.
+        # We expose named state scalars and camera frames (no flat OBS_STATE vector here).
         return {**self._state_ft, **self._cameras_ft}
 
     @cached_property
     def action_features(self) -> dict[str, type]:
-        # Teleop pose deltas / targets for left(A) and right(B), plus grippers and per-arm activation flags.
+        # Direct delta pose for left(A) and right(B), plus start/end flags per arm.
         return {
-            "l_x": float, "l_y": float, "l_z": float, "l_rx": float, "l_ry": float, "l_rz": float,
-            "r_x": float, "r_y": float, "r_z": float, "r_rx": float, "r_ry": float, "r_rz": float,
-            "l_gripper": int, "r_gripper": int,
-            "is_teleop_active_A": bool, "is_teleop_active_B": bool,
+            "deltapose_l_x": float, "deltapose_l_y": float, "deltapose_l_z": float, "deltapose_l_rx": float, "deltapose_l_ry": float, "deltapose_l_rz": float,
+            "deltapose_r_x": float, "deltapose_r_y": float, "deltapose_r_z": float, "deltapose_r_rx": float, "deltapose_r_ry": float, "deltapose_r_rz": float,
+            "start_A": int, "end_A": int,
+            "start_B": int, "end_B": int,
         }
 
     # -------------------- Connection lifecycle --------------------
@@ -155,7 +142,6 @@ class DensoWindows(Robot):
 
     @property
     def is_calibrated(self) -> bool:
-        # remote PC is responsible for any calibration; local side is stateless
         return True
 
     def calibrate(self) -> None:
@@ -194,7 +180,6 @@ class DensoWindows(Robot):
                     except json.JSONDecodeError:
                         continue
                     # Expect keys like: timestamp, r_state_A (list[float]), r_state_B (list[float])
-                    # Optionally: r_action_A/B, mesh_error, etc.
                     try:
                         a = np.asarray(msg.get("r_state_A", []), dtype=np.float32)
                         b = np.asarray(msg.get("r_state_B", []), dtype=np.float32)
@@ -204,26 +189,13 @@ class DensoWindows(Robot):
 
                     # Build observation dict
                     out: dict[str, Any] = {k: 0.0 for k in self._state_ft}
-                    
+
                     # Fill per-key scalar mapping if lengths match expected schema
-                    # Safely map joints/cart/cart_ft/task order (best-effort)
                     idx = 0
                     for key in self._state_ft:
                         if idx < state_vec.size:
                             out[key] = float(state_vec[idx])
                         idx += 1
-                        
-                    # Optionally include a flat state vector for downstream consumers
-                    if self.config.include_flat_obs_state:
-                        out[OBS_STATE] = state_vec
-
-                    # Persisted initial poses (if set) override mapped values for initPos_* keys
-                    if self._init_pose_A:
-                        for k, v in self._init_pose_A.items():
-                            out[k] = float(v)
-                    if self._init_pose_B:
-                        for k, v in self._init_pose_B.items():
-                            out[k] = float(v)
 
                     # Cache last observation
                     self._last_remote_state = out
@@ -248,63 +220,59 @@ class DensoWindows(Robot):
                 obs[cam_key] = None
         return obs
 
-    def _gripper_int_to_buttons(self, v: int) -> tuple[bool, bool]:
-        # Map 0(close),1(stay),2(open) -> two "button" booleans expected by your Windows server
-        if v == 0:
-            return True, False
-        if v == 2:
-            return False, True
-        return False, False
-
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         if not self._is_connected or self._sock is None:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # Read bi-spacemouse fields; missing keys default to 0
-        lx = float(action.get("l_x", 0.0))
-        ly = float(action.get("l_y", 0.0))
-        lz = float(action.get("l_z", 0.0))
-        lrx = float(action.get("l_rx", 0.0))
-        lry = float(action.get("l_ry", 0.0))
-        lrz = float(action.get("l_rz", 0.0))
+        # Read delta poses; missing keys default to 0
+        lx = float(action.get("deltapose_l_x", 0.0))
+        ly = float(action.get("deltapose_l_y", 0.0))
+        lz = float(action.get("deltapose_l_z", 0.0))
+        lrx = float(action.get("deltapose_l_rx", 0.0))
+        lry = float(action.get("deltapose_l_ry", 0.0))
+        lrz = float(action.get("deltapose_l_rz", 0.0))
 
-        rx = float(action.get("r_x", 0.0))
-        ry = float(action.get("r_y", 0.0))
-        rz = float(action.get("r_z", 0.0))
-        rrx = float(action.get("r_rx", 0.0))
-        rry = float(action.get("r_ry", 0.0))
-        rrz = float(action.get("r_rz", 0.0))
+        rx = float(action.get("deltapose_r_x", 0.0))
+        ry = float(action.get("deltapose_r_y", 0.0))
+        rz = float(action.get("deltapose_r_z", 0.0))
+        rrx = float(action.get("deltapose_r_rx", 0.0))
+        rry = float(action.get("deltapose_r_ry", 0.0))
+        rrz = float(action.get("deltapose_r_rz", 0.0))
 
-        lg = int(action.get("l_gripper", 1))
-        rg = int(action.get("r_gripper", 1))
+        # Optional start/end flags (forwarded for host-side latching)
+        start_A = int(action.get("start_A", 0))
+        end_A = int(action.get("end_A", 0))
+        start_B = int(action.get("start_B", 0))
+        end_B = int(action.get("end_B", 0))
 
-        lbtn0, lbtn1 = self._gripper_int_to_buttons(lg)
-        rbtn0, rbtn1 = self._gripper_int_to_buttons(rg)
+        lx = float(np.clip(lx, -100.0, 100.0))
+        ly = float(np.clip(ly, -100.0, 100.0))
+        lz = float(np.clip(lz, -100.0, 100.0))
+        lrx = float(np.clip(lrx, -10.0, 10.0))
+        lry = float(np.clip(lry, -10.0, 10.0))
+        lrz = float(np.clip(lrz, -10.0, 10.0))
 
-        # processing delta action [-1, 1]
-        lx = np.clip(lx, -1.0, 1.0)
-        ly = np.clip(ly, -1.0, 1.0)
-        lz = np.clip(lz, -1.0, 1.0)
-        lrx = np.clip(lrx, -1.0, 1.0)
-        lry = np.clip(lry, -1.0, 1.0)
-        lrz = np.clip(lrz, -1.0, 1.0)
+        rx = float(np.clip(rx, -100.0, 100.0))
+        ry = float(np.clip(ry, -100.0, 100.0))
+        rz = float(np.clip(rz, -100.0, 100.0))
+        rrx = float(np.clip(rrx, -10.0, 10.0))
+        rry = float(np.clip(rry, -10.0, 10.0))
+        rrz = float(np.clip(rrz, -10.0, 10.0))
 
-        rx = np.clip(rx, -1.0, 1.0)
-        ry = np.clip(ry, -1.0, 1.0)
-        rz = np.clip(rz, -1.0, 1.0)
-        rrx = np.clip(rrx, -1.0, 1.0)
-        rry = np.clip(rry, -1.0, 1.0)
-        rrz = np.clip(rrz, -1.0, 1.0)
+        # Build 6-DoF delta pose arrays
+        # action_A = [lx, ly, lz, lrx, lry, lrz]
+        # action_B = [rx, ry, rz, rrx, rry, rrz]
+        action_A = [lx, ly, lz, 0.0, 0.0, 0.0]
+        action_B = [rx, ry, rz, 0.0, 0.0, 0.0]
 
-        # Windows side expects 6-DoF [x,y,z,roll,pitch,yaw]; we only send translations and zero the rest
-        action_A = [lx, 0.0, 0.0, 0.0, 0.0, 0.0]
-        action_B = [rx, 0.0, 0.0, 0.0, 0.0, 0.0]
+        print(action_A)
+        print(action_B)
 
         payload = {
             "timestamp": time.time(),
             "task": "teleoperation",
-            "sm_A": {"action": action_A, "button": [int(0), int(0)]},
-            "sm_B": {"action": action_B, "button": [int(0), int(0)]},
+            "sm_A": {"action": action_A, "start_A": start_A, "end_A": end_A},
+            "sm_B": {"action": action_B, "start_B": start_B, "end_B": end_B},
         }
 
         try:
@@ -314,63 +282,30 @@ class DensoWindows(Robot):
             # connection hiccup; ignore this tick
             pass
 
-        # Per-arm teleoperation activation flags
-        teleop_A = bool(action.get("is_teleop_active_A", False))
-        teleop_B = bool(action.get("is_teleop_active_B", False))
+        # For dataset/logging convenience, also return a flat ACTION vector (float32)
+        act_vec = np.array([
+            lx, ly, lz, lrx, lry, lrz,
+            rx, ry, rz, rrx, rry, rrz,
+            float(start_A), float(end_A), float(start_B), float(end_B),
+        ], dtype=np.float32)
 
-        if teleop_A:
-            if not self._teleop_active_A:
-                # One-shot capture of initial pose for A using current cartesian state
-                last = self._last_remote_state or {}
-                self._init_pose_A = {
-                    "initPos_x_A": float(last.get("curPos_x_A", 0.0)),
-                    "initPos_y_A": float(last.get("curPos_y_A", 0.0)),
-                    "initPos_z_A": float(last.get("curPos_z_A", 0.0)),
-                    "initPos_roll_A": float(last.get("curPos_roll_A", 0.0)),
-                    "initPos_pitch_A": float(last.get("curPos_pitch_A", 0.0)),
-                    "initPos_yaw_A": float(last.get("curPos_yaw_A", 0.0)),
-                }
-            self._teleop_active_A = True
-        else:
-            self._teleop_active_A = False
-            # Clear cached initial pose on deactivate
-            self._init_pose_A = {}
-
-        if teleop_B:
-            if not self._teleop_active_B:
-                # One-shot capture of initial pose for B using current cartesian state
-                last = self._last_remote_state or {}
-                self._init_pose_B = {
-                    "initPos_x_B": float(last.get("curPos_x_B", 0.0)),
-                    "initPos_y_B": float(last.get("curPos_y_B", 0.0)),
-                    "initPos_z_B": float(last.get("curPos_z_B", 0.0)),
-                    "initPos_roll_B": float(last.get("curPos_roll_B", 0.0)),
-                    "initPos_pitch_B": float(last.get("curPos_pitch_B", 0.0)),
-                    "initPos_yaw_B": float(last.get("curPos_yaw_B", 0.0)),
-                }
-            self._teleop_active_B = True
-        else:
-            self._teleop_active_B = False
-            # Clear cached initial pose on deactivate
-            self._init_pose_B = {}
-
-        # For dataset compatibility, also return a flat ACTION vector (float32)
-        act_vec = np.array([lx, ly, lz, rx, ry, rz, float(lg), float(rg)], dtype=np.float32)
         out = {
-            "l_x": lx,
-            "l_y": ly,
-            "l_z": lz,
-            "l_rx": lrx,
-            "l_ry": lry,
-            "l_rz": lrz,
-            "r_x": rx,
-            "r_y": ry,
-            "r_z": rz,
-            "r_rx": rrx,
-            "r_ry": rry,
-            "r_rz": rrz,
-            "l_gripper": lg,
-            "r_gripper": rg,
+            "deltapose_l_x": lx,
+            "deltapose_l_y": ly,
+            "deltapose_l_z": lz,
+            "deltapose_l_rx": lrx,
+            "deltapose_l_ry": lry,
+            "deltapose_l_rz": lrz,
+            "deltapose_r_x": rx,
+            "deltapose_r_y": ry,
+            "deltapose_r_z": rz,
+            "deltapose_r_rx": rrx,
+            "deltapose_r_ry": rry,
+            "deltapose_r_rz": rrz,
+            "start_A": start_A,
+            "end_A": end_A,
+            "start_B": start_B,
+            "end_B": end_B,
             ACTION: act_vec,
         }
         return out
