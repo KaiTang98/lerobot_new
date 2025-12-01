@@ -51,6 +51,31 @@ from lerobot.utils.utils import (
     init_logging,
 )
 
+from subset_dataset import SubsetStateActionDataset
+from phase_shift_dataset import PhaseShiftedDataset, MultiTaskDataset
+from copy import deepcopy
+
+STATE_KEEP_NAMES = [
+    "ee_x_l", "ee_y_l", "ee_z_l",
+    "ee_qx_l", "ee_qy_l", "ee_qz_l", "ee_qw_l",
+    "force_x_l", "force_y_l", "force_z_l",
+    "torque_x_l", "torque_y_l", "torque_z_l",
+    "ee_x_r", "ee_y_r", "ee_z_r",
+    "ee_qx_r", "ee_qy_r", "ee_qz_r", "ee_qw_r",
+    "force_x_r", "force_y_r", "force_z_r",
+    "torque_x_r", "torque_y_r", "torque_z_r",
+    "stage",
+]
+
+ACTION_KEEP_NAMES = [
+    "ee_x_l", "ee_y_l", "ee_z_l",
+    "ee_qx_l", "ee_qy_l", "ee_qz_l", "ee_qw_l",
+    "gripper_l",
+    "ee_x_r", "ee_y_r", "ee_z_r",
+    "ee_qx_r", "ee_qy_r", "ee_qz_r", "ee_qw_r",
+    "gripper_r",
+]
+
 
 def update_policy(
     train_metrics: MetricsTracker,
@@ -188,7 +213,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # Now all other processes can safely load the dataset
     if not is_main_process:
         dataset = make_dataset(cfg)
-
+    dataset = SubsetStateActionDataset(dataset, STATE_KEEP_NAMES, ACTION_KEEP_NAMES)
     # Create environment used for evaluating checkpoints during training on simulation data.
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
     # using the eval.py instead, with gym_dora environment and dora-rs.
@@ -254,6 +279,30 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     num_total_params = sum(p.numel() for p in policy.parameters())
+
+    # Load second dataset for concatenation
+    takeoff_repo_id = "leledeyuan/takeoff-tshirt"
+    takeoff_cfg = deepcopy(cfg)
+    takeoff_cfg.dataset.repo_id = takeoff_repo_id
+    takeoff_dataset = make_dataset(takeoff_cfg)
+    takeoff_dataset = SubsetStateActionDataset(takeoff_dataset, STATE_KEEP_NAMES, ACTION_KEEP_NAMES)
+    takeoff_dataset = PhaseShiftedDataset(takeoff_dataset, phase_offset=5)
+    
+    playing_repo_id = "leledeyuan/playing-phase"
+    playing_cfg = deepcopy(cfg)
+    playing_cfg.dataset.repo_id = playing_repo_id
+    playing_dataset = make_dataset(playing_cfg)
+    playing_dataset = SubsetStateActionDataset(playing_dataset, STATE_KEEP_NAMES, ACTION_KEEP_NAMES)
+    playing_dataset = PhaseShiftedDataset(playing_dataset, phase_offset=8)
+
+    idle_repo_id = "leledeyuan/idle-phase"
+    idle_cfg = deepcopy(cfg)
+    idle_cfg.dataset.repo_id = idle_repo_id
+    idle_dataset = make_dataset(idle_cfg)
+    idle_dataset = SubsetStateActionDataset(idle_dataset, STATE_KEEP_NAMES, ACTION_KEEP_NAMES)
+    idle_dataset = PhaseShiftedDataset(idle_dataset, phase_offset=9)
+
+    dataset = MultiTaskDataset([dataset, takeoff_dataset, playing_dataset, idle_dataset])
 
     if is_main_process:
         logging.info(colored("Output dir:", "yellow", attrs=["bold"]) + f" {cfg.output_dir}")
@@ -429,11 +478,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if is_main_process:
         logging.info("End of training")
 
-        # if cfg.policy.push_to_hub:
-        #     unwrapped_policy = accelerator.unwrap_model(policy)
-        #     unwrapped_policy.push_model_to_hub(cfg)
-        #     preprocessor.push_to_hub(cfg.policy.repo_id)
-        #     postprocessor.push_to_hub(cfg.policy.repo_id)
+        if cfg.policy.push_to_hub:
+            unwrapped_policy = accelerator.unwrap_model(policy)
+            unwrapped_policy.push_model_to_hub(cfg)
+            preprocessor.push_to_hub(cfg.policy.repo_id)
+            postprocessor.push_to_hub(cfg.policy.repo_id)
 
     # Properly clean up the distributed process group
     accelerator.wait_for_everyone()
