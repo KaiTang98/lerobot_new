@@ -96,30 +96,28 @@ class QuestHapticsDensoDeltaPoseRobotActionStep(ProcessorStep):
         start_B = 1 if active_right else 0
         end_B = 0 if active_right else 1
 
-        new_action: dict[str, Any] = {**action}
-        new_action.update(
-            {
-                # Left arm delta pose
-                "deltapose_l_x": float(l_dpos[0]),
-                "deltapose_l_y": float(l_dpos[1]),
-                "deltapose_l_z": float(l_dpos[2]),
-                "deltapose_l_rx": l_rx,
-                "deltapose_l_ry": l_ry,
-                "deltapose_l_rz": l_rz,
-                # Right arm delta pose
-                "deltapose_r_x": float(r_dpos[0]),
-                "deltapose_r_y": float(r_dpos[1]),
-                "deltapose_r_z": float(r_dpos[2]),
-                "deltapose_r_rx": r_rx,
-                "deltapose_r_ry": r_ry,
-                "deltapose_r_rz": r_rz,
-                # Start/End flags
-                "start_A": int(start_A),
-                "end_A": int(end_A),
-                "start_B": int(start_B),
-                "end_B": int(end_B),
-            }
-        )
+        # Only emit the fields needed downstream; omit original teleop inputs.
+        new_action: dict[str, Any] = {
+            # Left arm delta pose
+            "deltapose_l_x": float(l_dpos[0]),
+            "deltapose_l_y": float(l_dpos[1]),
+            "deltapose_l_z": float(l_dpos[2]),
+            "deltapose_l_rx": l_rx,
+            "deltapose_l_ry": l_ry,
+            "deltapose_l_rz": l_rz,
+            # Right arm delta pose
+            "deltapose_r_x": float(r_dpos[0]),
+            "deltapose_r_y": float(r_dpos[1]),
+            "deltapose_r_z": float(r_dpos[2]),
+            "deltapose_r_rx": r_rx,
+            "deltapose_r_ry": r_ry,
+            "deltapose_r_rz": r_rz,
+            # Start/End flags
+            "start_A": int(start_A),
+            "end_A": int(end_A),
+            "start_B": int(start_B),
+            "end_B": int(end_B),
+        }
 
         tr[TransitionKey.ACTION] = new_action
         return tr

@@ -146,7 +146,7 @@ class DatasetRecordConfig:
     # Limit the frames per second.
     fps: int = 30
     # Number of seconds for data recording for each episode.
-    episode_time_s: int | float = 60
+    episode_time_s: int | float = 120
     # Number of seconds for resetting the environment after each episode.
     reset_time_s: int | float = 60
     # Number of episodes to record.
@@ -361,6 +361,8 @@ def record_loop(
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
         _sent_action = robot.send_action(robot_action_to_send)
 
+        teleop.send_feedback(obs)
+
         # Write to dataset
         if dataset is not None:
             action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
@@ -457,7 +459,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
 
             # Connect to robot server
-            while True:
+            while False:
                 try:
 
                     import socket, json

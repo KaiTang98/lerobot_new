@@ -65,7 +65,7 @@ class RealSenseCameraConfig(CameraConfig):
     warmup_s: int = 1
     # RGB camera exposure/white-balance controls
     enable_auto_exposure: bool = False
-    exposure: int = 150
+    exposure: int = 30
     gain: int = 50
     enable_auto_white_balance: bool = False
     white_balance: int = 4700

@@ -59,9 +59,11 @@ class DensoDeltaPose(Robot):
         self._reader_stop: threading.Event | None = None
 
         # Latest remote state cached
-        self._last_remote_state: dict[str, Any] = {}
+        self._last_remote_state = {}
+        # Latest action coming from intime (Windows host), parsed into des* keys
+        self._last_remote_action = {}
 
-        self._is_connected: bool = False
+        self._is_connected = False
 
     # -------------------- Feature descriptors --------------------
     @cached_property
@@ -98,10 +100,31 @@ class DensoDeltaPose(Robot):
     def action_features(self) -> dict[str, type]:
         # Direct delta pose for left(A) and right(B), plus start/end flags per arm.
         return {
+            # action A (left) from quest
             "deltapose_l_x": float, "deltapose_l_y": float, "deltapose_l_z": float, "deltapose_l_rx": float, "deltapose_l_ry": float, "deltapose_l_rz": float,
+            # action B (right) from quest
             "deltapose_r_x": float, "deltapose_r_y": float, "deltapose_r_z": float, "deltapose_r_rx": float, "deltapose_r_ry": float, "deltapose_r_rz": float,
-            "start_A": int, "end_A": int,
-            "start_B": int, "end_B": int,
+            # state change for A/B (use float so dataset schema includes them; values are 0.0 or 1.0)
+            "start_A": float, "end_A": float,
+            "start_B": float, "end_B": float,
+            # action A from intime (POS, VEL, VELPure, FT) (24)
+            "desPos_x_A": float, "desPos_y_A": float, "desPos_z_A": float,
+            "desPos_roll_A": float, "desPos_pitch_A": float, "desPos_yaw_A": float,
+            "desVel_x_A": float, "desVel_y_A": float, "desVel_z_A": float,
+            "desVel_roll_A": float, "desVel_pitch_A": float, "desVel_yaw_A": float,
+            "desVelPure_x_A": float, "desVelPure_y_A": float, "desVelPure_z_A": float,
+            "desVelPure_roll_A": float, "desVelPure_pitch_A": float, "desVelPure_yaw_A": float,
+            "desFT_x_A": float, "desFT_y_A": float, "desFT_z_A": float,
+            "desFT_roll_A": float, "desFT_pitch_A": float, "desFT_yaw_A": float,
+            # action B from intime (POS, VEL, VELPure, FT) (24)
+            "desPos_x_B": float, "desPos_y_B": float, "desPos_z_B": float,
+            "desPos_roll_B": float, "desPos_pitch_B": float, "desPos_yaw_B": float,
+            "desVel_x_B": float, "desVel_y_B": float, "desVel_z_B": float,
+            "desVel_roll_B": float, "desVel_pitch_B": float, "desVel_yaw_B": float,
+            "desVelPure_x_B": float, "desVelPure_y_B": float, "desVelPure_z_B": float,
+            "desVelPure_roll_B": float, "desVelPure_pitch_B": float, "desVelPure_yaw_B": float,
+            "desFT_x_B": float, "desFT_y_B": float, "desFT_z_B": float,
+            "desFT_roll_B": float, "desFT_pitch_B": float, "desFT_yaw_B": float
         }
 
     # -------------------- Connection lifecycle --------------------
@@ -184,8 +207,13 @@ class DensoDeltaPose(Robot):
                         a = np.asarray(msg.get("r_state_A", []), dtype=np.float32)
                         b = np.asarray(msg.get("r_state_B", []), dtype=np.float32)
                         state_vec = np.concatenate([a, b], dtype=np.float32)
+
+                        action_A = np.asarray(msg.get("r_action_A", []), dtype=np.float32)
+                        action_B = np.asarray(msg.get("r_action_B", []), dtype=np.float32)
+                        action_vec = np.concatenate([action_A, action_B], dtype=np.float32)
                     except Exception:
                         state_vec = np.asarray([], dtype=np.float32)
+                        action_vec = np.asarray([], dtype=np.float32)
 
                     # Build observation dict
                     out: dict[str, Any] = {k: 0.0 for k in self._state_ft}
@@ -199,6 +227,32 @@ class DensoDeltaPose(Robot):
 
                     # Cache last observation
                     self._last_remote_state = out
+                    # Map action_vec into intime action feature keys (desPos/desVel/desVelPure/desFT for A then B)
+                    action_keys_order = [
+                        # A (24)
+                        "desPos_x_A", "desPos_y_A", "desPos_z_A",
+                        "desPos_roll_A", "desPos_pitch_A", "desPos_yaw_A",
+                        "desVel_x_A", "desVel_y_A", "desVel_z_A",
+                        "desVel_roll_A", "desVel_pitch_A", "desVel_yaw_A",
+                        "desVelPure_x_A", "desVelPure_y_A", "desVelPure_z_A",
+                        "desVelPure_roll_A", "desVelPure_pitch_A", "desVelPure_yaw_A",
+                        "desFT_x_A", "desFT_y_A", "desFT_z_A",
+                        "desFT_roll_A", "desFT_pitch_A", "desFT_yaw_A",
+                        # B (24)
+                        "desPos_x_B", "desPos_y_B", "desPos_z_B",
+                        "desPos_roll_B", "desPos_pitch_B", "desPos_yaw_B",
+                        "desVel_x_B", "desVel_y_B", "desVel_z_B",
+                        "desVel_roll_B", "desVel_pitch_B", "desVel_yaw_B",
+                        "desVelPure_x_B", "desVelPure_y_B", "desVelPure_z_B",
+                        "desVelPure_roll_B", "desVelPure_pitch_B", "desVelPure_yaw_B",
+                        "desFT_x_B", "desFT_y_B", "desFT_z_B",
+                        "desFT_roll_B", "desFT_pitch_B", "desFT_yaw_B",
+                    ]
+                    act_out: dict[str, Any] = {}
+                    for i, k in enumerate(action_keys_order):
+                        if i < action_vec.size:
+                            act_out[k] = float(action_vec[i])
+                    self._last_remote_action = act_out
         finally:
             try:
                 sock.close()
@@ -211,6 +265,9 @@ class DensoDeltaPose(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         obs = dict(self._last_remote_state) if self._last_remote_state else {}
+        # Attach cache under a namespaced key for processors to optionally consume.
+        if self._last_remote_action:
+            obs["_last_remote_action"] = dict(self._last_remote_action)
 
         # Attach current camera frames
         for cam_key, cam in self.cameras.items():
@@ -248,22 +305,22 @@ class DensoDeltaPose(Robot):
         lx = float(np.clip(lx, -100.0, 100.0))
         ly = float(np.clip(ly, -100.0, 100.0))
         lz = float(np.clip(lz, -100.0, 100.0))
-        lrx = float(np.clip(lrx, -10.0, 10.0))
-        lry = float(np.clip(lry, -10.0, 10.0))
-        lrz = float(np.clip(lrz, -10.0, 10.0))
+        lrx = float(np.clip(lrx, -1.0, 1.0))
+        lry = float(np.clip(lry, -1.0, 1.0))
+        lrz = float(np.clip(lrz, -1.0, 1.0))
 
         rx = float(np.clip(rx, -100.0, 100.0))
         ry = float(np.clip(ry, -100.0, 100.0))
         rz = float(np.clip(rz, -100.0, 100.0))
-        rrx = float(np.clip(rrx, -10.0, 10.0))
-        rry = float(np.clip(rry, -10.0, 10.0))
-        rrz = float(np.clip(rrz, -10.0, 10.0))
+        rrx = float(np.clip(rrx, -1.0, 1.0))
+        rry = float(np.clip(rry, -1.0, 1.0))
+        rrz = float(np.clip(rrz, -1.0, 1.0))
 
         # Build 6-DoF delta pose arrays
-        # action_A = [lx, ly, lz, lrx, lry, lrz]
-        # action_B = [rx, ry, rz, rrx, rry, rrz]
-        action_A = [lx, ly, lz, 0.0, 0.0, 0.0]
-        action_B = [rx, ry, rz, 0.0, 0.0, 0.0]
+        action_A = [lx, ly, lz, lrx, lry, lrz]
+        action_B = [rx, ry, rz, rrx, rry, rrz]
+        # action_A = [lx, ly, lz, 0.0, 0.0, 0.0]
+        # action_B = [rx, ry, rz, 0.0, 0.0, 0.0]
 
         print(action_A)
         print(action_B)
