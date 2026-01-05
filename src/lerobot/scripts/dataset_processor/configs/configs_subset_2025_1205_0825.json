@@ -1,0 +1,12 @@
+{ 
+    "subset_state_names": [
+        "curPos_x_A", "curPos_y_A", "curPos_z_A", "curPos_roll_A", "curPos_pitch_A", "curPos_yaw_A",
+        "curFT_x_A", "curFT_y_A", "curFT_z_A", "curFT_roll_A", "curFT_pitch_A", "curFT_yaw_A",
+        "curPos_x_B", "curPos_y_B", "curPos_z_B", "curPos_roll_B", "curPos_pitch_B", "curPos_yaw_B",
+        "curFT_x_B", "curFT_y_B", "curFT_z_B", "curFT_roll_B", "curFT_pitch_B", "curFT_yaw_B"
+    ],
+    "subset_action_names": [
+        "desVelPure_x_A", "desVelPure_y_A", "desVelPure_z_A", "desVelPure_roll_A", "desVelPure_pitch_A", "desVelPure_yaw_A",
+        "desVelPure_x_B", "desVelPure_y_B", "desVelPure_z_B", "desVelPure_roll_B", "desVelPure_pitch_B", "desVelPure_yaw_B"
+    ] 
+}

@@ -178,7 +178,6 @@ class DatasetRecordConfig:
         if self.single_task is None:
             raise ValueError("You need to provide a task as argument in `single_task`.")
 
-
 @dataclass
 class RecordConfig:
     robot: RobotConfig
@@ -359,9 +358,16 @@ def record_loop(
         # Action can eventually be clipped using `max_relative_target`,
         # so action actually sent is saved in the dataset. action = postprocessor.process(action)
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
-        _sent_action = robot.send_action(robot_action_to_send)
+        if robot.name == "denso_deltapose":
+            if policy is not None:
+                _sent_action = robot.send_action(robot_action_to_send, is_infer=True)
+            else:
+                _sent_action = robot.send_action(robot_action_to_send, is_infer=False)
+        else:
+            _sent_action = robot.send_action(robot_action_to_send)
 
-        teleop.send_feedback(obs)
+        if policy is None and teleop is not None:
+            teleop.send_feedback(obs)
 
         # Write to dataset
         if dataset is not None:

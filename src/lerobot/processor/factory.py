@@ -28,6 +28,7 @@ from .core import RobotAction, RobotObservation
 from .pipeline import IdentityProcessorStep, RobotProcessorPipeline
 from .quest_haptics_denso_windows_robot_action_step import QuestHapticsDensoWindowsRobotActionStep
 from .quest_haptics_denso_deltapose_robot_action_step import QuestHapticsDensoDeltaPoseRobotActionStep
+from.quest_haptics_denso_deltapose_force_robot_action_step import QuestHapticsDensoDeltaPoseForceRobotActionStep
 from .denso_deltapose_teleop_fusion_step import DensoDeltaPoseTeleopFusionStep
 from .denso_deltapose_strip_remote_action_step import DensoDeltaPoseStripRemoteActionStep
 
@@ -61,6 +62,14 @@ def make_questhaptics_densodeltapose_robot_observation_processor() -> RobotProce
     )
     return robot_observation_processor
 
+def make_questhaptics_densodeltapose_force_robot_observation_processor() -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
+    # Strip _last_remote_action so processed obs is clean (state + cameras only).
+    robot_observation_processor = RobotProcessorPipeline[RobotObservation, RobotObservation](
+        steps=[DensoDeltaPoseStripRemoteActionStep()],
+        to_transition=observation_to_transition,
+        to_output=transition_to_observation,
+    )
+    return robot_observation_processor
 
 # ---------------------------------------------
 # ------- teleoperation action processor ------
@@ -92,6 +101,18 @@ def make_questhaptics_densodeltapose_teleop_action_processor() -> RobotProcessor
     # Teleop pipeline: first compute deltapose_* from Quest inputs, then fuse obs-derived intime fields.
     teleop_action_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
         steps=[QuestHapticsDensoDeltaPoseRobotActionStep(scale_mm=1000.0, deadzone=1.0),
+               DensoDeltaPoseTeleopFusionStep()],
+        to_transition=robot_action_observation_to_transition,
+        to_output=transition_to_robot_action,
+    )
+    return teleop_action_processor
+
+def make_questhaptics_densodeltapose_force_teleop_action_processor() -> RobotProcessorPipeline[
+    tuple[RobotAction, RobotObservation], RobotAction
+]:
+    # Teleop pipeline: first compute deltapose_* from Quest inputs, then fuse obs-derived intime fields.
+    teleop_action_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
+        steps=[QuestHapticsDensoDeltaPoseForceRobotActionStep(scale_mm=1000.0, deadzone=1.0),
                DensoDeltaPoseTeleopFusionStep()],
         to_transition=robot_action_observation_to_transition,
         to_output=transition_to_robot_action,
@@ -133,6 +154,16 @@ def make_questhaptics_densodeltapose_robot_action_processor() -> RobotProcessorP
     )
     return robot_action_processor
 
+def make_questhaptics_densodeltapose_force_robot_action_processor() -> RobotProcessorPipeline[
+    tuple[RobotAction, RobotObservation], RobotAction
+]:
+    # Robot action processor can be identity; conversion is done in teleop pipeline.
+    robot_action_processor  = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
+        steps=[IdentityProcessorStep()],
+        to_transition=robot_action_observation_to_transition,
+        to_output=transition_to_robot_action,
+    )
+    return robot_action_processor
 
 # ---------------------------------------------
 # ------ teleop-robot processor factory -------
@@ -145,7 +176,8 @@ def make_teleop_robot_processors(robotConfig: RobotConfig,
         return make_questhaptics_densowindows_processor()
     if teleopConfig is not None and teleopConfig.type == "bi_quest_haptics" and robotConfig.type == "denso_deltapose":
         return make_questhaptics_densodeltapose_processor()
-    
+    if teleopConfig is not None and teleopConfig.type == "bi_quest_haptics" and robotConfig.type == "denso_deltapose_force":
+        return make_questhaptics_densodeltapose_force_processor()
     else:
         return make_default_processors()
 
@@ -169,4 +201,11 @@ def make_questhaptics_densodeltapose_processor():
     robot_observation_processor = make_questhaptics_densodeltapose_robot_observation_processor()
     teleop_action_processor = make_questhaptics_densodeltapose_teleop_action_processor()
     robot_action_processor = make_questhaptics_densodeltapose_robot_action_processor()
+    return (teleop_action_processor, robot_action_processor, robot_observation_processor)
+
+def make_questhaptics_densodeltapose_force_processor():
+    # For the delta-pose robot, convert Quest absolute to deltapose_* via dedicated step.
+    robot_observation_processor = make_questhaptics_densodeltapose_force_robot_observation_processor()
+    teleop_action_processor = make_questhaptics_densodeltapose_force_teleop_action_processor()
+    robot_action_processor = make_questhaptics_densodeltapose_force_robot_action_processor()
     return (teleop_action_processor, robot_action_processor, robot_observation_processor)

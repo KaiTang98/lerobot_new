@@ -296,16 +296,21 @@ class BiQuestHapticsTeleop(Teleoperator):
 		# Left controller button states (boolean to float 0/1)
 		out["l_X"] = 1.0 if bool(buttons.get("X", False)) else 0.0
 		out["l_Y"] = 1.0 if bool(buttons.get("Y", False)) else 0.0
-		out["l_joystick_press"] = 1.0 if bool(buttons.get("joystick", False)) else 0.0
-		out["l_trigger_up_press"] = 1.0 if bool(buttons.get("trigger_up", False)) else 0.0
-		out["l_trigger_down_press"] = 1.0 if bool(buttons.get("trigger_down", False)) else 0.0
+		out["l_joystick_press"] = 1.0 if bool(buttons.get("LJ", False)) else 0.0
+		out["l_trigger_up_press"] = 1.0 if bool(buttons.get("LG", False)) else 0.0
+		out["l_trigger_down_press"] = 1.0 if bool(buttons.get("LTr", False)) else 0.0
 		
 		# Right controller button states	
 		out["r_A"] = 1.0 if bool(buttons.get("A", False)) else 0.0
 		out["r_B"] = 1.0 if bool(buttons.get("B", False)) else 0.0
-		out["r_joystick_press"] = 1.0 if bool(buttons.get("joystick", False)) else 0.0
-		out["r_trigger_up_press"] = 1.0 if bool(buttons.get("trigger_up", False)) else 0.0
-		out["r_trigger_down_press"] = 1.0 if bool(buttons.get("trigger_down", False)) else 0.0
+		out["r_joystick_press"] = 1.0 if bool(buttons.get("RJ", False)) else 0.0
+		out["r_trigger_up_press"] = 1.0 if bool(buttons.get("RG", False)) else 0.0
+		out["r_trigger_down_press"] = 1.0 if bool(buttons.get("RTr", False)) else 0.0
+
+		# print("l_trigger_up_press:", out["l_trigger_up_press"])
+		# print("l_trigger_down_press:", out["l_trigger_down_press"])
+		# print("r_trigger_up_press:", out["r_trigger_up_press"])
+		# print("r_trigger_down_press:", out["r_trigger_down_press"])
 
 		# when "l_X" is pressed, start left controller pose control, store initial pose
 		if out["l_X"] == 1.0:

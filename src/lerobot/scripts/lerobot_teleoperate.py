@@ -79,6 +79,8 @@ from lerobot.robots import (  # noqa: F401
     so101_follower,
     robotiq,
     denso_windows,
+    denso_deltapose,
+    denso_deltapose_force
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,

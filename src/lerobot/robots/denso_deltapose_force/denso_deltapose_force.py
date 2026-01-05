@@ -29,10 +29,10 @@ from lerobot.utils.constants import ACTION
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..robot import Robot
-from .config_denso_deltapose import DensoDeltaPoseConfig
+from .config_denso_deltapose_force import DensoDeltaPoseForceConfig
 
 
-class DensoDeltaPose(Robot):
+class DensoDeltaPoseForce(Robot):
     """Denso manipulator client that forwards delta-pose commands directly.
 
     This mirrors the Windows TCP protocol used by `DensoWindows`, but the action schema
@@ -43,10 +43,10 @@ class DensoDeltaPose(Robot):
     Observations expose the named scalar state and any configured camera frames.
     """
 
-    config_class = DensoDeltaPoseConfig
-    name = "denso_deltapose"
+    config_class = DensoDeltaPoseForceConfig
+    name = "denso_deltapose_force"
 
-    def __init__(self, config: DensoDeltaPoseConfig):
+    def __init__(self, config: DensoDeltaPoseForceConfig):
         super().__init__(config)
         self.config = config
 
@@ -107,6 +107,9 @@ class DensoDeltaPose(Robot):
             # state change for A/B (use float so dataset schema includes them; values are 0.0 or 1.0)
             "start_A": float, "end_A": float,
             "start_B": float, "end_B": float,
+            # buttons control
+            "button_A_1": float, "button_A_2": float,
+            "button_B_1": float, "button_B_2": float,
             # action A from intime (POS, VEL, VELPure, FT) (24)
             "desPos_x_A": float, "desPos_y_A": float, "desPos_z_A": float,
             "desPos_roll_A": float, "desPos_pitch_A": float, "desPos_yaw_A": float,
@@ -277,7 +280,7 @@ class DensoDeltaPose(Robot):
                 obs[cam_key] = None
         return obs
 
-    def send_action(self, action: dict[str, Any], is_infer: bool) -> dict[str, Any]:
+    def send_action(self, action: dict[str, Any], is_infer: bool = False) -> dict[str, Any]:
         if not self._is_connected or self._sock is None:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
@@ -366,19 +369,29 @@ class DensoDeltaPose(Robot):
             rrz = float(np.clip(rrz, -1.0, 1.0))
 
             # Build 6-DoF delta pose arrays
-            action_A = [lx, ly, lz, lrx, lry, lrz]
-            action_B = [rx, ry, rz, rrx, rry, rrz]
+            action_A = [lx, ly, 0.0, 0.0, 0.0, lrz]
+            action_B = [rx, ry, 0.0, 0.0, 0.0, rrz]
             # action_A = [lx, ly, lz, 0.0, 0.0, 0.0]
             # action_B = [rx, ry, rz, 0.0, 0.0, 0.0]
 
             print(action_A)
             print(action_B)
 
+            button_A_1 = int(action.get("button_A_1", 0))
+            button_A_2 = int(action.get("button_A_2", 0))
+            button_B_1 = int(action.get("button_B_1", 0))
+            button_B_2 = int(action.get("button_B_2", 0))
+            button_A = [button_A_1, button_A_2]
+            button_B = [button_B_1, button_B_2]
+
+            print(button_A)
+            print(button_B)
+
             payload = {
                 "timestamp": time.time(),
                 "task": "teleoperation",
-                "sm_A": {"action": action_A, "start_A": start_A, "end_A": end_A},
-                "sm_B": {"action": action_B, "start_B": start_B, "end_B": end_B},
+                "sm_A": {"action": action_A, "start_A": start_A, "end_A": end_A, "button_A": button_A},
+                "sm_B": {"action": action_B, "start_B": start_B, "end_B": end_B, "button_B": button_B},
             }
 
         try:
@@ -393,6 +406,7 @@ class DensoDeltaPose(Robot):
             lx, ly, lz, lrx, lry, lrz,
             rx, ry, rz, rrx, rry, rrz,
             float(start_A), float(end_A), float(start_B), float(end_B),
+            float(button_A_1), float(button_A_2), float(button_B_1), float(button_B_2)
         ], dtype=np.float32)
 
         out = {
@@ -412,6 +426,10 @@ class DensoDeltaPose(Robot):
             "end_A": end_A,
             "start_B": start_B,
             "end_B": end_B,
+            "button_A_1": button_A_1,
+            "button_A_2": button_A_2,
+            "button_B_1": button_B_1,
+            "button_B_2": button_B_2,
             ACTION: act_vec,
         }
         return out

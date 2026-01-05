@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
+import warnings
 import time
 from contextlib import nullcontext
 from pprint import pformat
@@ -153,6 +154,14 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         accelerator = Accelerator(step_scheduler_with_optimizer=False, kwargs_handlers=[ddp_kwargs])
 
     init_logging(accelerator=accelerator)
+    # Suppress torchvision video deprecation warnings
+    warnings.filterwarnings(
+        "ignore",
+        message=(
+            "The video decoding and encoding capabilities of torchvision are deprecated"
+        ),
+        category=UserWarning,
+    )
 
     # Determine if this is the main process (for logging and checkpointing)
     # When using accelerate, only the main process should log to avoid duplicate outputs

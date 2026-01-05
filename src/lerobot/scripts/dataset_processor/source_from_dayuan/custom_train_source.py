@@ -51,7 +51,7 @@ from lerobot.utils.utils import (
     init_logging,
 )
 
-from subset_dataset import SubsetStateActionDataset
+from subset_dataset_source import SubsetStateActionDataset
 from phase_shift_dataset import PhaseShiftedDataset, MultiTaskDataset
 from copy import deepcopy
 

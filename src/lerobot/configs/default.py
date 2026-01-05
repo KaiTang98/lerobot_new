@@ -35,6 +35,12 @@ class DatasetConfig:
     use_imagenet_stats: bool = True
     video_backend: str = field(default_factory=get_safe_default_codec)
     streaming: bool = False
+    # Optional: subset selection for custom training wrapper
+    # Path to JSON with keys {"subset_state_names": [...], "subset_action_names": [...]}.
+    subset_config_path: str | None = None
+    # Direct lists of feature names to keep; if provided they override the JSON.
+    subset_state_names: list[str] | None = None
+    subset_action_names: list[str] | None = None
 
 
 @dataclass

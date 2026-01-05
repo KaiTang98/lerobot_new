@@ -84,6 +84,7 @@ def print_loop(teleop: Teleoperator, fps: int, duration: Optional[float]) -> Non
             # print ~5 times per second
             if n % max(1, fps // 5) == 0:
                 print(f"{_format_action(action, ordered_names)}{evt_str}")
+                print()
 
             elapsed = time.perf_counter() - loop_t0
             busy_wait(max(0.0, target_period - elapsed))
