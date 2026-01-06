@@ -1,0 +1,3 @@
+[submodule "external/mesh_gat"]
+	path = external/mesh_gat
+	url = https://github.com/KaiTang98/mesh_gat.git
