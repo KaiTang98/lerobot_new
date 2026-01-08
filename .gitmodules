@@ -1,3 +1,6 @@
 [submodule "external/mesh_gat"]
 	path = external/mesh_gat
 	url = https://github.com/KaiTang98/mesh_gat.git
+[submodule "external/sam2"]
+	path = external/sam2
+	url = https://github.com/KaiTang98/segment-anything-2-real-time.git
