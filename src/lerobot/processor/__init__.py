@@ -50,6 +50,7 @@ from .hil_processor import (
     TimeLimitProcessorStep,
 )
 from .joint_observations_processor import JointVelocityProcessorStep, MotorCurrentProcessorStep
+from .mesh_gat_processor import MeshGATObservationProcessorStep
 from .normalize_processor import NormalizerProcessorStep, UnnormalizerProcessorStep, hotswap_stats
 from .observation_processor import VanillaObservationProcessorStep
 from .pipeline import (
@@ -130,4 +131,5 @@ __all__ = [
     "TruncatedProcessorStep",
     "UnnormalizerProcessorStep",
     "VanillaObservationProcessorStep",
+    "MeshGATObservationProcessorStep",
 ]

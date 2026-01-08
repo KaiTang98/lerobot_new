@@ -154,11 +154,15 @@ class RealSenseCamera(Camera):
 
         self.rs_pipeline: rs.pipeline | None = None
         self.rs_profile: rs.pipeline_profile | None = None
+        # When depth is enabled, align depth to the color stream so the returned
+        # depth map shares the same pixel grid as RGB.
+        self._align_to_color: Any | None = None
 
         self.thread: Thread | None = None
         self.stop_event: Event | None = None
         self.frame_lock: Lock = Lock()
         self.latest_frame: NDArray[Any] | None = None
+        self.latest_depth_frame: NDArray[Any] | None = None
         self.new_frame_event: Event = Event()
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
@@ -207,6 +211,10 @@ class RealSenseCamera(Camera):
 
         self._configure_capture_settings()
 
+        # Align depth to color (if enabled) so downstream consumers can assume
+        # depth and RGB are in the same pixel coordinate frame.
+        self._align_to_color = rs.align(rs.stream.color) if self.use_depth else None
+
         # Optional: configure RGB sensor exposure and white-balance options
         try:
             dev = self.rs_profile.get_device()  # type: ignore[union-attr]
@@ -230,8 +238,10 @@ class RealSenseCamera(Camera):
                     if not self.config.enable_auto_exposure:
                         if self.config.exposure is not None and color_sensor.supports(rs.option.exposure):
                             color_sensor.set_option(rs.option.exposure, float(self.config.exposure))
+                            print(f"Manual Exposure:  {self.config.exposure}")
                         if self.config.gain is not None and color_sensor.supports(rs.option.gain):
                             color_sensor.set_option(rs.option.gain, float(self.config.gain))
+                            print(f"Manual Gain:  {self.config.gain}")
                 except Exception:
                     # Non-fatal: continue without forcing exposure options
                     pass
@@ -247,6 +257,7 @@ class RealSenseCamera(Camera):
                         if self.config.white_balance is not None and color_sensor.supports(rs.option.white_balance):
                             # Some devices require values in steps of 100; driver will clamp if needed.
                             color_sensor.set_option(rs.option.white_balance, float(self.config.white_balance))
+                            print(f"Manual WB:  {self.config.white_balance}K")
                 except Exception:
                     # Non-fatal
                     pass
@@ -263,7 +274,38 @@ class RealSenseCamera(Camera):
                 self.read()
                 time.sleep(0.1)
 
+        # get the configs
+        color_stream = self.rs_profile.get_stream(rs.stream.color)
+        color_profile = color_stream.as_video_stream_profile()
+        actual_fps = color_profile.fps()
+        actual_width = color_profile.width()
+        actual_height = color_profile.height()
+        print(f"Actual fps: {actual_fps}")
+        print(f"Actual width: {actual_width}")
+        print(f"Actual height: {actual_height}")
+
+        # query the depth sensor’s scale (in meters per unit)
+        depth_sensor = dev.first_depth_sensor()
+        self.depth_scale = float(depth_sensor.get_depth_scale())
+        # Mirror runtime calibration into config for convenient access.
+        self.config.depth_scale = self.depth_scale
+        print(f"Depth-unit = {self.depth_scale:.6f} m")  # typically 0.001 m for L515
+        # print(f"Clipping range: {self.clipping_range_meter[0]}m - {self.clipping_range_meter[1]}m")
+        # self.clipping_range_pixel = [int(self.clipping_range_meter[0] / self.depth_scale),
+        #                              int(self.clipping_range_meter[1] / self.depth_scale)]
+        
+        # print the camera intrinsics
+        intrinsics = color_profile.get_intrinsics()
+        self.camera_intrinsics = np.array(
+            [[intrinsics.fx, 0.0, intrinsics.ppx], [0.0, intrinsics.fy, intrinsics.ppy], [0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        )
+        # Mirror runtime calibration into config for convenient access.
+        self.config.camera_intrinsics = self.camera_intrinsics.astype(float).tolist()
+        print(f"Camera intrinsics: {self.camera_intrinsics}")
+
         logger.info(f"{self} connected.")
+
 
     @staticmethod
     def find_cameras() -> list[dict[str, Any]]:
@@ -432,7 +474,7 @@ class RealSenseCamera(Camera):
 
         return depth_map_processed
 
-    def read(self, color_mode: ColorMode | None = None, timeout_ms: int = 200) -> NDArray[Any]:
+    def read(self, color_mode: ColorMode | None = None, timeout_ms: int = 200) -> NDArray[Any] | dict[str, NDArray[Any]]:
         """
         Reads a single frame (color) synchronously from the camera.
 
@@ -460,15 +502,35 @@ class RealSenseCamera(Camera):
         if self.rs_pipeline is None:
             raise RuntimeError(f"{self}: rs_pipeline must be initialized before use.")
 
-        ret, frame = self.rs_pipeline.try_wait_for_frames(timeout_ms=timeout_ms)
+        ret, frames = self.rs_pipeline.try_wait_for_frames(timeout_ms=timeout_ms)
 
-        if not ret or frame is None:
+        if not ret or frames is None:
             raise RuntimeError(f"{self} read failed (status={ret}).")
 
-        color_frame = frame.get_color_frame()
-        color_image_raw = np.asanyarray(color_frame.get_data())
+        # If depth is enabled, align frames to the color stream so depth is
+        # returned at the color resolution and aligned pixelwise.
+        if self.use_depth:
+            if self._align_to_color is None:
+                raise RuntimeError(f"{self}: depth is enabled but align-to-color is not initialized.")
+            frames = self._align_to_color.process(frames)
 
+        color_frame = frames.get_color_frame()
+        color_image_raw = np.asanyarray(color_frame.get_data())
         color_image_processed = self._postprocess_image(color_image_raw, color_mode)
+
+        # Optional depth capture when enabled
+        if self.use_depth:
+            depth_frame = frames.get_depth_frame()
+            if depth_frame is None:
+                raise RuntimeError(f"{self} depth frame is None despite use_depth=True.")
+            depth_raw = np.asanyarray(depth_frame.get_data())
+            depth_processed = self._postprocess_image(depth_raw, depth_frame=True)
+
+            read_duration_ms = (time.perf_counter() - start_time) * 1e3
+            logger.debug(f"{self} read (color+depth) took: {read_duration_ms:.1f}ms")
+
+            # Return both color and depth in a dict to keep backward compatibility for color-only users.
+            return {"color": color_image_processed, "depth": depth_processed}
 
         read_duration_ms = (time.perf_counter() - start_time) * 1e3
         logger.debug(f"{self} read took: {read_duration_ms:.1f}ms")
@@ -508,17 +570,29 @@ class RealSenseCamera(Camera):
             if c != 3:
                 raise RuntimeError(f"{self} frame channels={c} do not match expected 3 channels (RGB/BGR).")
 
-        if h != self.capture_height or w != self.capture_width:
+        # NOTE: Some RealSense devices (e.g. L515) may stream depth at a lower
+        # resolution than color (e.g. 320x240 depth with 640x480 color). For
+        # webcam-like usage we enforce expected capture dimensions for *color*
+        # to catch misconfiguration, but we accept native depth resolution.
+        if not depth_frame and (h != self.capture_height or w != self.capture_width):
             raise RuntimeError(
                 f"{self} frame width={w} or height={h} do not match configured width={self.capture_width} or height={self.capture_height}."
             )
 
         processed_image = image
-        if self.color_mode == ColorMode.BGR:
+        # Never apply color conversions to depth frames.
+        if not depth_frame and self.color_mode == ColorMode.BGR:
             processed_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
         if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180]:
             processed_image = cv2.rotate(processed_image, self.rotation)
+
+        # Guardrail: depth should remain a single-channel image.
+        if depth_frame and processed_image.ndim != 2:
+            raise RuntimeError(
+                f"{self} expected depth frame to be 2D (H,W) but got shape={processed_image.shape}. "
+                "Depth must be raw (uint16/float) not colorized."
+            )
 
         return processed_image
 
@@ -538,10 +612,21 @@ class RealSenseCamera(Camera):
 
         while not self.stop_event.is_set():
             try:
-                color_image = self.read(timeout_ms=500)
+                frame = self.read(timeout_ms=500)
+
+                # For async_read compatibility, store only the color image, but also
+                # keep depth in a separate buffer when available.
+                if isinstance(frame, dict):
+                    color_image = frame.get("color")
+                    depth_image = frame.get("depth")
+                else:
+                    color_image = frame
+                    depth_image = None
 
                 with self.frame_lock:
                     self.latest_frame = color_image
+                    if depth_image is not None:
+                        self.latest_depth_frame = depth_image
                 self.new_frame_event.set()
 
             except DeviceNotConnectedError:
@@ -621,6 +706,51 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"Internal error: Event set but no frame available for {self}.")
 
         return frame
+
+    def async_read_both(self, timeout_ms: float = 200) -> dict[str, NDArray[Any]]:
+        """Asynchronously read the latest color and (optionally) depth frames.
+
+        Returns a dict with keys "color" and, when `use_depth` is True and a
+        depth frame has been captured, "depth".
+
+        This method uses the same background thread as `async_read` but exposes
+        the secondary depth buffer as well.
+        """
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        if self.thread is None or not self.thread.is_alive():
+            self._start_read_thread()
+
+        # Fast path: return the most recent frames immediately if available.
+        with self.frame_lock:
+            color = self.latest_frame
+            depth = self.latest_depth_frame if self.use_depth else None
+        if color is not None and (not self.use_depth or depth is not None):
+            result: dict[str, NDArray[Any]] = {"color": color}
+            if depth is not None:
+                result["depth"] = depth
+            return result
+
+        # First-frame fallback: wait up to timeout for the background thread to populate.
+        if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
+            thread_alive = self.thread is not None and self.thread.is_alive()
+            raise TimeoutError(
+                f"Timed out waiting for first frame from camera {self} after {timeout_ms} ms. "
+                f"Read thread alive: {thread_alive}."
+            )
+
+        with self.frame_lock:
+            color = self.latest_frame
+            depth = self.latest_depth_frame if self.use_depth else None
+
+        if color is None:
+            raise RuntimeError(f"Internal error: Event set but no color frame available for {self}.")
+
+        result = {"color": color}
+        if depth is not None:
+            result["depth"] = depth
+        return result
 
     def disconnect(self) -> None:
         """

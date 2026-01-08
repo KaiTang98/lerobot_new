@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from typing import Optional
 
 from ..configs import CameraConfig, ColorMode, Cv2Rotation
 
@@ -63,6 +64,12 @@ class RealSenseCameraConfig(CameraConfig):
     use_depth: bool = False
     rotation: Cv2Rotation = Cv2Rotation.NO_ROTATION
     warmup_s: int = 1
+    # Runtime-populated camera calibration (filled in by RealSenseCamera.connect()).
+    # These are optional so configs remain easy to author; after connect() you can
+    # access `camera.config.depth_scale` and `camera.config.camera_intrinsics`.
+    depth_scale: Optional[float] = None
+    # 3x3 camera intrinsics matrix for the COLOR stream (and aligned depth).
+    camera_intrinsics: Optional[list[list[float]]] = None
     # RGB camera exposure/white-balance controls
     enable_auto_exposure: bool = False
     exposure: int = 30

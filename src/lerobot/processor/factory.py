@@ -31,6 +31,7 @@ from .quest_haptics_denso_deltapose_robot_action_step import QuestHapticsDensoDe
 from.quest_haptics_denso_deltapose_force_robot_action_step import QuestHapticsDensoDeltaPoseForceRobotActionStep
 from .denso_deltapose_teleop_fusion_step import DensoDeltaPoseTeleopFusionStep
 from .denso_deltapose_strip_remote_action_step import DensoDeltaPoseStripRemoteActionStep
+from .mesh_gat_processor import MeshGATObservationProcessorStep
 
 
 # ---------------------------------------------
@@ -70,6 +71,44 @@ def make_questhaptics_densodeltapose_force_robot_observation_processor() -> Robo
         to_output=transition_to_observation,
     )
     return robot_observation_processor
+
+
+def make_denso_meshgat_robot_observation_processor(
+    checkpoint_path: str,
+    config_path: str,
+    template_path: str | None = None,
+    device: str = "cuda",
+    input_key: str = "pcl",
+    output_key: str = "mesh_vertices",
+) -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
+    """Robot observation processor for Denso robots with MeshGAT inference.
+
+    This helper composes the existing Denso obs cleanup step
+    (DensoDeltaPoseStripRemoteActionStep) with MeshGATObservationProcessorStep.
+
+    It is not wired into any default factory yet; call it explicitly when you
+    want MeshGAT-enabled observations.
+    """
+
+    steps = [
+        DensoDeltaPoseStripRemoteActionStep(),
+        MeshGATObservationProcessorStep(
+            checkpoint_path=checkpoint_path,
+            config_path=config_path,
+            template_path=template_path,
+            device=device,
+            input_key=input_key,
+            output_key=output_key,
+        ),
+    ]
+
+    robot_observation_processor = RobotProcessorPipeline[RobotObservation, RobotObservation](
+        steps=steps,
+        to_transition=observation_to_transition,
+        to_output=transition_to_observation,
+    )
+    return robot_observation_processor
+
 
 # ---------------------------------------------
 # ------- teleoperation action processor ------
@@ -209,3 +248,4 @@ def make_questhaptics_densodeltapose_force_processor():
     teleop_action_processor = make_questhaptics_densodeltapose_force_teleop_action_processor()
     robot_action_processor = make_questhaptics_densodeltapose_force_robot_action_processor()
     return (teleop_action_processor, robot_action_processor, robot_observation_processor)
+
