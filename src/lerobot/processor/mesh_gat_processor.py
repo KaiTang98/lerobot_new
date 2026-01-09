@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Optional
+import os
+import sys
 
 import numpy as np
 import torch
@@ -35,11 +37,8 @@ from lerobot.configs.types import PipelineFeatureType, PolicyFeature
 from lerobot.processor.pipeline import ObservationProcessorStep, ProcessorStepRegistry
 
 
-try:
-    # Import from the MeshGAT submodule.
-    from external.mesh_gat.api import load_meshgat_model
-except ImportError:  # pragma: no cover - handled at runtime
-    load_meshgat_model = None  # type: ignore[assignment]
+# We'll dynamically import load_meshgat_model in _lazy_init_model to handle path setup
+load_meshgat_model = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -90,10 +89,19 @@ class MeshGATObservationProcessorStep(ObservationProcessorStep):
         if self._model is not None:
             return
 
-        if load_meshgat_model is None:
+        # Dynamically import load_meshgat_model with path setup
+        try:
+            # Add external/mesh_gat to path so its internal imports work
+            _mesh_gat_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "external", "mesh_gat")
+            _mesh_gat_dir = os.path.abspath(_mesh_gat_dir)
+            if os.path.exists(_mesh_gat_dir) and _mesh_gat_dir not in sys.path:
+                sys.path.insert(0, _mesh_gat_dir)
+            
+            from api import load_meshgat_model  # Import from mesh_gat directory
+        except ImportError as e:
             raise RuntimeError(
-                "MeshGATObservationProcessorStep requires the `external/mesh_gat` "
-                "submodule to be available and importable."
+                f"MeshGATObservationProcessorStep requires the `external/mesh_gat` "
+                f"submodule to be available and importable. Import error: {e}"
             )
 
         model, cfg = load_meshgat_model(
