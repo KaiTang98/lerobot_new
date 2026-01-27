@@ -747,6 +747,17 @@ class RealSenseCamera(Camera):
         if color is None:
             raise RuntimeError(f"Internal error: Event set but no color frame available for {self}.")
 
+        # If depth is required but not available, surface a TimeoutError so callers
+        # know the read failed to deliver a coherent color+depth pair. Previously we
+        # returned only color in this case which led to inconsistent observation
+        # dictionaries (color present but no depth key).
+        if self.use_depth and depth is None:
+            thread_alive = self.thread is not None and self.thread.is_alive()
+            raise TimeoutError(
+                f"Timed out waiting for depth frame from camera {self} after {timeout_ms} ms. "
+                f"Read thread alive: {thread_alive}."
+            )
+
         result = {"color": color}
         if depth is not None:
             result["depth"] = depth

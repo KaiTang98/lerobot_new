@@ -60,6 +60,7 @@ lerobot-record \
 
 import logging
 import time
+import numpy as np
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from pprint import pformat
@@ -101,6 +102,8 @@ from lerobot.robots import (  # noqa: F401
     so101_follower,
     robotiq,
     denso_windows,
+    denso_deltapose,
+    denso_deltapose_force,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -310,6 +313,9 @@ def record_loop(
         if policy is not None or dataset is not None:
             observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
 
+        print("OBS_PROCESSED KEYS:", list(obs_processed.keys()))
+        print("OBS_PROCESSED TYPES:", {k: (type(v).__name__, getattr(v, 'shape', None)) for k, v in obs_processed.items()})
+
         # Get action from either policy or teleop
         if policy is not None and preprocessor is not None and postprocessor is not None:
             action_values = predict_action(
@@ -455,21 +461,64 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         )
 
     robot.connect()
+    
+    # Update MeshGAT processor with actual camera intrinsics after connection
+    if hasattr(cfg.robot, 'enable_meshgat') and cfg.robot.enable_meshgat:
+        camera_key = cfg.robot.meshgat_camera_key
+        camera_cfg = cfg.robot.cameras[camera_key]
+        
+        # Update processor with actual runtime intrinsics
+        for step in robot_observation_processor.steps:
+            if hasattr(step, 'fx') and hasattr(step, 'depth_scale'):
+                # This is the FabricPointCloudProcessorStep
+                if camera_cfg.camera_intrinsics is not None:
+                    step.fx = float(camera_cfg.camera_intrinsics[0][0])
+                    step.fy = float(camera_cfg.camera_intrinsics[1][1])
+                    step.cx = float(camera_cfg.camera_intrinsics[0][2])
+                    step.cy = float(camera_cfg.camera_intrinsics[1][2])
+                    step._intrinsics_matrix = np.array([
+                        [step.fx, 0.0, step.cx],
+                        [0.0, step.fy, step.cy],
+                        [0.0, 0.0, 1.0]
+                    ], dtype=np.float32)
+                if camera_cfg.depth_scale is not None:
+                    step.depth_scale = camera_cfg.depth_scale
+    
     if teleop is not None:
         teleop.connect()
 
     listener, events = init_keyboard_listener()
+
+    log_say(f"Warmup Record.", cfg.play_sounds)
+    time.sleep(2.0)
+    record_loop(
+        robot=robot,
+        events=events,
+        fps=cfg.dataset.fps,
+        teleop_action_processor=teleop_action_processor,
+        robot_action_processor=robot_action_processor,
+        robot_observation_processor=robot_observation_processor,
+        teleop=teleop,
+        policy=policy,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        dataset=None,
+        control_time_s=5,
+        single_task=cfg.dataset.single_task,
+        display_data=cfg.display_data,
+    )
 
     with VideoEncodingManager(dataset):
         recorded_episodes = 0
         while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
 
             # Connect to robot server
+            print(f"[CLIENT] Attempting to connect to robot task server at 192.168.2.105:12344...")
             while False:
                 try:
 
                     import socket, json
-                    SERVER_IP = "192.168.2.100"
+                    SERVER_IP = "192.168.2.105"
                     TASK_PORT = 12344
                     RECV_BUFFER = 4096
                     SOCKET_TIMEOUT = 1.0
@@ -565,7 +614,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     break
 
                 except (ConnectionRefusedError, socket.timeout) as e:
-                    print(f"[CLIENT] Connection failed ({e}), retrying in 1s...")
+                    print(f"[CLIENT] Connection failed ({type(e).__name__}: {e}), retrying in 1s...")
                     try:
                         sock.close()
                     except:

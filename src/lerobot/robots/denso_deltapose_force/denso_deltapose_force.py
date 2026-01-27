@@ -142,12 +142,32 @@ class DensoDeltaPoseForce(Robot):
         # 1) Connect TCP socket to Windows server
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1.0)
-        while True:
+        
+        # Add timeout to prevent infinite loop (30 seconds total)
+        max_attempts = 150  # 150 * 0.2s = 30 seconds
+        attempts = 0
+        print(f"[ROBOT] Attempting to connect to Denso server at {self.config.server_ip}:{self.config.server_port}...")
+        
+        while attempts < max_attempts:
             try:
                 sock.connect((self.config.server_ip, self.config.server_port))
+                print(f"[ROBOT] Successfully connected to Denso server after {attempts} attempts")
                 break
-            except (ConnectionRefusedError, TimeoutError, OSError):
+            except (ConnectionRefusedError, TimeoutError, OSError) as e:
+                attempts += 1
+                if attempts % 25 == 0:  # Print every 5 seconds
+                    print(f"[ROBOT] Still trying to connect... ({attempts}/{max_attempts} attempts)")
                 time.sleep(0.2)
+        else:
+            # Timeout reached
+            raise ConnectionError(
+                f"Failed to connect to Denso robot server at {self.config.server_ip}:{self.config.server_port} "
+                f"after {max_attempts} attempts (30 seconds). Please ensure:\n"
+                f"  1. Windows server is running on {self.config.server_ip}\n"
+                f"  2. Server is listening on port {self.config.server_port}\n"
+                f"  3. Network connection is working (can you ping {self.config.server_ip}?)"
+            )
+        
         sock.setblocking(False)
         self._sock = sock
 
@@ -156,13 +176,30 @@ class DensoDeltaPoseForce(Robot):
         self._reader_thread = threading.Thread(target=self._reader_loop, name="denso-reader", daemon=True)
         self._reader_thread.start()
 
-        # 3) Connect cameras
-        for cam in self.cameras.values():
+        # 3) Connect cameras and ensure they have warmed up (produced at least one frame).
+        for cam_key, cam in self.cameras.items():
             try:
                 cam.connect()
-            except Exception:
-                # non-fatal: proceed without camera
-                pass
+                # Wait for at least one successful frame after connect. Use camera's warmup_s
+                # as a guideline but allow a small additional buffer.
+                warmup_seconds = getattr(cam, "warmup_s", 1.0) or 1.0
+                timeout = warmup_seconds + 1.0
+                start_time = time.time()
+                while time.time() - start_time < timeout:
+                    try:
+                        if getattr(cam, "use_depth", False):
+                            cam.async_read_both(timeout_ms=1000)
+                        else:
+                            cam.async_read(timeout_ms=1000)
+                        # Successful read - camera warmed up
+                        break
+                    except Exception:
+                        time.sleep(0.1)
+                else:
+                    print(f"[ROBOT] Warning: camera {cam_key} did not produce frames within {timeout:.1f}s after connect.")
+            except Exception as e:
+                # non-fatal: proceed without camera but log a warning
+                print(f"[ROBOT] Warning: failed to connect camera {cam_key}: {e}")
 
         self._is_connected = True
 
@@ -273,11 +310,28 @@ class DensoDeltaPoseForce(Robot):
             obs["_last_remote_action"] = dict(self._last_remote_action)
 
         # Attach current camera frames
+        # LeRobot convention: flat keys for images, e.g. "camera_l515" for RGB
         for cam_key, cam in self.cameras.items():
             try:
-                obs[cam_key] = cam.async_read()
-            except Exception:
+                # Check if camera has depth enabled (use_depth attribute)
+                if hasattr(cam, 'use_depth') and cam.use_depth:
+                        # Use async_read_both() to get both color and depth. async_read_both
+                        # now guarantees that when use_depth=True it will either return
+                        # both 'color' and 'depth' or raise a TimeoutError. We still
+                        # defensively handle missing keys to avoid KeyError and ensure
+                        # observation always contains the sibling depth key.
+                        frames = cam.async_read_both()
+                        obs[cam_key] = frames.get("color")  # Will become observation.images.camera_l515
+                        # Ensure the depth sibling key is always present (None if missing)
+                        obs[f"{cam_key}_depth"] = frames.get("depth")
+                else:
+                    # Single color frame
+                    obs[cam_key] = cam.async_read()
+            except Exception as e:
+                # Log a warning and ensure both rgb and depth sibling keys exist
+                print(f"[WARNING] Failed to read from camera {cam_key}: {e}")
                 obs[cam_key] = None
+                obs[f"{cam_key}_depth"] = None
         return obs
 
     def send_action(self, action: dict[str, Any], is_infer: bool = False) -> dict[str, Any]:

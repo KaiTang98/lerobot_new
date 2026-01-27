@@ -43,7 +43,7 @@ from lerobot.datasets.backward_compatibility import (
     BackwardCompatibilityError,
     ForwardCompatibilityError,
 )
-from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_STR
+from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_STR, OBS_PCL, OBS_MESH
 from lerobot.utils.utils import SuppressProgressBars, is_valid_numpy_dtype_string
 
 DEFAULT_CHUNK_SIZE = 1000  # Max number of files per chunk
@@ -569,9 +569,14 @@ def get_hf_features_from_features(features: dict) -> datasets.Features:
         elif ft["shape"] == (1,):
             hf_features[key] = datasets.Value(dtype=ft["dtype"])
         elif len(ft["shape"]) == 1:
-            hf_features[key] = datasets.Sequence(
-                length=ft["shape"][0], feature=datasets.Value(dtype=ft["dtype"])
-            )
+            # If shape[0] is None, create a variable-length Sequence (no length arg).
+            seq_len = ft["shape"][0]
+            if seq_len is None:
+                hf_features[key] = datasets.Sequence(feature=datasets.Value(dtype=ft["dtype"]))
+            else:
+                hf_features[key] = datasets.Sequence(
+                    length=seq_len, feature=datasets.Value(dtype=ft["dtype"]) 
+                )
         elif len(ft["shape"]) == 2:
             hf_features[key] = datasets.Array2D(shape=ft["shape"], dtype=ft["dtype"])
         elif len(ft["shape"]) == 3:
@@ -623,7 +628,10 @@ def hw_to_dataset_features(
     joint_fts = {
         key: ftype
         for key, ftype in hw_features.items()
-        if ftype is float or (isinstance(ftype, PolicyFeature) and ftype.type != FeatureType.VISUAL)
+        if ftype is float or (
+            isinstance(ftype, PolicyFeature)
+            and ftype.type not in (FeatureType.VISUAL, FeatureType.PCL, FeatureType.MESH)
+        )
     }
     cam_fts = {key: shape for key, shape in hw_features.items() if isinstance(shape, tuple)}
 
@@ -647,6 +655,37 @@ def hw_to_dataset_features(
             "shape": shape,
             "names": ["height", "width", "channels"],
         }
+
+    # Handle pointcloud and mesh modality keys produced by processors
+    # Expected keys: 'pcl', 'pcl.<name>' or 'mesh', 'mesh.<name>'  or 'mesh_vertices', etc.
+    for key, val in hw_features.items():
+        # Extract shape: could be a tuple, PolicyFeature object, or None
+        if isinstance(val, PolicyFeature):
+            shape = val.shape
+        elif isinstance(val, tuple):
+            shape = val
+        else:
+            shape = (None,)
+        
+        if key == "pcl" or key.startswith("pcl."):
+            # map to observation.pcl or observation.pcl.<name>
+            sub = key[4:] if key.startswith("pcl.") else ""
+            name = f"{prefix}.pcl{sub}" if sub else f"{prefix}.pcl"
+            features[name] = {"dtype": "float32", "shape": shape}
+        elif key.startswith("mesh"):
+            # Handle 'mesh', 'mesh.<name>', 'mesh_vertices', etc.
+            # Map to observation.mesh, observation.mesh.<name>, observation.mesh_vertices
+            if key == "mesh":
+                name = f"{prefix}.mesh"
+            elif key.startswith("mesh."):
+                sub = key[5:]  # Everything after "mesh."
+                name = f"{prefix}.mesh.{sub}"
+            elif key.startswith("mesh_"):
+                sub = key[5:]  # Everything after "mesh_"
+                name = f"{prefix}.mesh_{sub}"
+            else:
+                name = f"{prefix}.{key}"
+            features[name] = {"dtype": "float32", "shape": shape}
 
     _validate_feature_names(features)
     return features
@@ -673,8 +712,50 @@ def build_dataset_frame(
     for key, ft in ds_features.items():
         if key in DEFAULT_FEATURES or not key.startswith(prefix):
             continue
-        elif ft["dtype"] == "float32" and len(ft["shape"]) == 1:
-            frame[key] = np.array([values[name] for name in ft["names"]], dtype=np.float32)
+        elif ft["dtype"] == "float32" and len(ft["shape"]) == 1 and ft.get("names"):
+            # Build state vector from named scalar features
+            # Check for any non-scalar values in the names list
+            scalar_values = []
+            for name in ft["names"]:
+                val = values.get(name)
+                if val is None:
+                    raise ValueError(
+                        f"Missing value for feature name '{name}' in key '{key}'.\n"
+                        f"Available keys in values: {list(values.keys())}"
+                    )
+                # Check if it's an array
+                if isinstance(val, (np.ndarray, list, tuple)):
+                    if isinstance(val, np.ndarray) and val.ndim == 0:
+                        # 0-dimensional array is effectively a scalar
+                        scalar_values.append(float(val))
+                    else:
+                        raise ValueError(
+                            f"Feature '{key}' has 'names' list but name '{name}' maps to an array!\n"
+                            f"  Value type: {type(val)}\n"
+                            f"  Value shape: {val.shape if hasattr(val, 'shape') else len(val)}\n"
+                            f"  Feature spec: {ft}\n"
+                            f"  This suggests 'pcl' or 'mesh_vertices' got incorrectly added to the names list.\n"
+                            f"  All names in this feature: {ft['names']}"
+                        )
+                else:
+                    scalar_values.append(float(val))
+            frame[key] = np.array(scalar_values, dtype=np.float32)
+        elif ft["dtype"] == "float32" and len(ft["shape"]) >= 2:
+            # Handle multidimensional float32 features (pcl, mesh) by direct lookup
+            # Key may be "observation.pcl" but value is stored as "pcl" in values dict
+            value_key = key.removeprefix(f"{prefix}.")
+            if value_key in values:
+                frame[key] = np.asarray(values[value_key], dtype=np.float32)
+            else:
+                # Also try without any prefix stripping
+                if key in values:
+                    frame[key] = np.asarray(values[key], dtype=np.float32)
+                else:
+                    raise ValueError(
+                        f"Missing multidimensional feature '{key}' (tried keys: '{value_key}', '{key}').\n"
+                        f"Feature spec: {ft}\n"
+                        f"Available keys in values: {list(values.keys())}"
+                    )
         elif ft["dtype"] in ["image", "video"]:
             frame[key] = values[key.removeprefix(f"{prefix}.images.")]
 
@@ -712,7 +793,14 @@ def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFea
                 shape = (shape[2], shape[0], shape[1])
         elif key == OBS_ENV_STATE:
             type = FeatureType.ENV
+        elif key.startswith(OBS_STR + ".pcl") or key == OBS_PCL:
+            # Explicit 3D point cloud modality
+            type = FeatureType.PCL
+        elif key.startswith(OBS_STR + ".mesh") or key == OBS_MESH:
+            # Explicit mesh modality
+            type = FeatureType.MESH
         elif key.startswith(OBS_STR):
+            # Generic observation/state
             type = FeatureType.STATE
         elif key.startswith(ACTION):
             type = FeatureType.ACTION
@@ -755,6 +843,7 @@ def combine_feature_dicts(*dicts: dict) -> dict:
                 dtype not in ("image", "video", "string")
                 and isinstance(shape, tuple)
                 and len(shape) == 1
+                and shape[0] is not None  # Exclude variable-length arrays (shape=(None,))
                 and "names" in value
             )
 
@@ -1065,8 +1154,18 @@ def validate_feature_numpy_array(
         if actual_dtype != np.dtype(expected_dtype):
             error_message += f"The feature '{name}' of dtype '{actual_dtype}' is not of the expected dtype '{expected_dtype}'.\n"
 
-        if actual_shape != expected_shape:
-            error_message += f"The feature '{name}' of shape '{actual_shape}' does not have the expected shape '{expected_shape}'.\n"
+        # Check shape, allowing None to match any dimension size (variable length)
+        if len(actual_shape) != len(expected_shape):
+            error_message += f"The feature '{name}' of shape '{actual_shape}' does not have the expected number of dimensions (expected {len(expected_shape)} dims, got {len(actual_shape)}).\n"
+        else:
+            shape_mismatch = False
+            for i, (actual_dim, expected_dim) in enumerate(zip(actual_shape, expected_shape)):
+                # None means variable length - any value is acceptable
+                if expected_dim is not None and actual_dim != expected_dim:
+                    shape_mismatch = True
+                    break
+            if shape_mismatch:
+                error_message += f"The feature '{name}' of shape '{actual_shape}' does not have the expected shape '{expected_shape}'.\n"
     else:
         error_message += f"The feature '{name}' is not a 'np.ndarray'. Expected type is '{expected_dtype}', but type '{type(value)}' provided instead.\n"
 

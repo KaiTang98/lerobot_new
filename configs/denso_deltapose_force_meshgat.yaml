@@ -1,0 +1,62 @@
+# Configuration for Denso DeltaPose Force robot with MeshGAT fabric mesh prediction
+# Usage: lerobot-record --config configs/denso_deltapose_force_meshgat.yaml
+
+robot:
+  type: denso_deltapose_force
+  server_ip: "192.168.2.105"
+  server_port: 12345
+  fps: 100
+  
+  # Camera Configuration (RealSense L515 with depth)
+  cameras:
+    camera_l515:
+      type: intelrealsense
+      serial_number_or_name: f1181599
+      width: 640
+      height: 480
+      fps: 30
+      use_depth: true
+      color_mode: RGB
+  
+  # ============ MeshGAT Configuration ============
+  # Set to true to enable SAM2 + FabricPointCloud + MeshGAT pipeline
+  enable_meshgat: true
+  
+  # Which camera to use for RGB-D input
+  meshgat_camera_key: camera_l515
+  
+  # Model Checkpoints (update these paths to your setup)
+  meshgat_checkpoint_path: /home/ktang/ws/data/mesh_gat/collar_pcl/checkpoint/finalbestmodel_1999_0.00645.pt
+  meshgat_config_path: /home/ktang/ws/data/mesh_gat/collar_pcl/checkpoint/config.yaml
+  sam2_checkpoint_path: external/sam2/checkpoints/sam2.1_hiera_tiny.pt
+  
+  # SAM2 Initial Prompt (point on fabric center)
+  sam2_initial_point: [320, 240]
+  # OR use a bounding box:
+  # sam2_initial_box: [100, 100, 540, 380]
+  
+  # Optional: Advanced MeshGAT Settings
+  meshgat_device: cuda
+  meshgat_target_num_points: 1024
+  meshgat_input_key: pcl
+  meshgat_output_key: mesh_vertices
+  meshgat_expected_num_vertices: 442  # Expected number of mesh vertices for dataset consistency
+  # meshgat_template_path: /path/to/template.obj  # Optional template mesh
+
+# Teleoperator Configuration (Quest 3 with haptics)
+teleop:
+  type: bi_quest_haptics
+
+# Dataset Configuration
+dataset:
+  repo_id: ${HF_USER}/denso_fabric_manipulation
+  single_task: "Fold the fabric using both arms with force feedback"
+  fps: 30
+  num_episodes: 50
+  video: true
+  push_to_hub: false
+  root: data/lerobot
+
+# Optional: Display settings
+display_data: true
+play_sounds: true

@@ -25,7 +25,7 @@ from typing import Any, Callable
 import numpy as np
 from numpy.typing import NDArray
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
+from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.processor.pipeline import ObservationProcessorStep, ProcessorStepRegistry
 
 
@@ -86,10 +86,10 @@ class FabricPointCloudProcessorStep(ObservationProcessorStep):
         # Add the pointcloud as a new observation feature
         if PipelineFeatureType.OBSERVATION in features:
             obs_features = features[PipelineFeatureType.OBSERVATION].copy()
-            # Define the pointcloud feature
+            # Define the pointcloud feature with PCL type
             obs_features[self.output_key] = PolicyFeature(
+                type=FeatureType.PCL,
                 shape=(self.target_num_points, 3),
-                dtype="float32",
             )
             features = features.copy()
             features[PipelineFeatureType.OBSERVATION] = obs_features

@@ -212,7 +212,7 @@ def teleoperate(cfg: TeleoperateConfig):
         try:
 
             import socket, json
-            SERVER_IP = "192.168.2.100"
+            SERVER_IP = "192.168.2.105"
             TASK_PORT = 12344
             RECV_BUFFER = 4096
             SOCKET_TIMEOUT = 1.0

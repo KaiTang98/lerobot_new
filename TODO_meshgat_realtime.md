@@ -39,24 +39,24 @@ Step-by-step plan to integrate a real-time MeshGAT fabric perception pipeline in
 
 ## 3. SAM2 Integration (for fabric segmentation)
 
-- [ ] 3.1 Add SAM2 as git submodule
+- [done] 3.1 Add SAM2 as git submodule
   - `git submodule add https://github.com/facebookresearch/segment-anything-2.git external/sam2/sam2`
   - Install: `cd external/sam2/sam2 && pip install -e .`
-- [ ] 3.2 Download SAM2 checkpoint
+- [done] 3.2 Download SAM2 checkpoint
   - Create `external/sam2/checkpoints/` directory
   - Download model: `sam2_hiera_large.pt` or `sam2_hiera_small.pt` (for speed)
-- [ ] 3.3 Create SAM2 API wrapper (done: `external/sam2/api.py`)
+- [done] 3.3 Create SAM2 API wrapper (done: `external/sam2/api.py`)
   - Functions: `load_sam2_predictor()`, `create_sam2_runner()`, `create_simple_sam2_runner()`
-- [ ] 3.4 Test SAM2 integration
+- [done] 3.4 Test SAM2 integration
   - Create test script with synthetic RGB image
   - Verify sam_runner returns correct mask shape
-- [ ] 3.5 Determine fabric bounding box prompt
+- [done] 3.5 Determine fabric bounding box prompt
   - Manually identify fabric region in your camera view
   - Record box_prompt: `[x1, y1, x2, y2]` coordinates
 
 ## 4. Wire FabricPointCloud + MeshGAT into Denso observation pipeline
 
-- [ ] 4.1 Create `make_denso_meshgat_robot_observation_processor` factory
+- [done] 4.1 Create `make_denso_meshgat_robot_observation_processor` factory
   - Location: `src/lerobot/processor/factory.py`
   - Steps:
     - `DensoDeltaPoseStripRemoteActionStep()` - cleanup

@@ -32,7 +32,7 @@ class DensoWindowsConfig(RobotConfig):
     """
 
     # Remote Windows server address
-    server_ip: str = "192.168.2.100"
+    server_ip: str = "192.168.2.105"
     server_port: int = 12345
 
     # Optional: target loop rate for local timing/teleop assumptions

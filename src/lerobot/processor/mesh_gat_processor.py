@@ -33,7 +33,7 @@ import sys
 import numpy as np
 import torch
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
+from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.processor.pipeline import ObservationProcessorStep, ProcessorStepRegistry
 
 
@@ -72,6 +72,7 @@ class MeshGATObservationProcessorStep(ObservationProcessorStep):
     template_path: Optional[str] = None
     device: str = "cuda"
     output_key: str = "mesh_vertices"
+    expected_num_vertices: Optional[int] = None  # Expected mesh size for dataset schema
 
     # Internal cache (not part of the external config)
     _model: Optional[torch.nn.Module] = field(default=None, init=False, repr=False)
@@ -119,16 +120,23 @@ class MeshGATObservationProcessorStep(ObservationProcessorStep):
         """Adds the mesh vertices output feature to the observation features.
 
         This step adds a new observation key (output_key) with shape (num_vertices, 3).
-        The exact number of vertices is unknown at transform_features time, so we use
-        None as a placeholder (variable-length).
+        If expected_num_vertices is provided, uses that for consistent dataset schema.
+        Otherwise, uses None as a placeholder (variable-length).
         """
         # Add the mesh_vertices as a new observation feature
         if PipelineFeatureType.OBSERVATION in features:
             obs_features = features[PipelineFeatureType.OBSERVATION].copy()
-            # Define the mesh_vertices feature (shape is model-dependent, use None)
+            
+            # Determine the mesh shape - use expected_num_vertices if provided for consistency
+            if self.expected_num_vertices is not None:
+                mesh_shape = (self.expected_num_vertices, 3)
+            else:
+                mesh_shape = (None, 3)  # Variable number of vertices (will be fixed at runtime)
+            
+            # Define the mesh_vertices feature with MESH type
             obs_features[self.output_key] = PolicyFeature(
-                shape=(None, 3),  # Variable number of vertices
-                dtype="float32",
+                type=FeatureType.MESH,
+                shape=mesh_shape,
             )
             features = features.copy()
             features[PipelineFeatureType.OBSERVATION] = obs_features

@@ -27,6 +27,10 @@ OBS_LANGUAGE = OBS_STR + ".language"
 OBS_LANGUAGE_TOKENS = OBS_LANGUAGE + ".tokens"
 OBS_LANGUAGE_ATTENTION_MASK = OBS_LANGUAGE + ".attention_mask"
 
+# Top-level 3D modalities
+OBS_PCL = OBS_STR + ".pcl"
+OBS_MESH = OBS_STR + ".mesh"
+
 ACTION = "action"
 REWARD = "next.reward"
 TRUNCATED = "next.truncated"

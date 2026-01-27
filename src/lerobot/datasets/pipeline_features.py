@@ -19,7 +19,7 @@ from typing import Any
 from lerobot.configs.types import PipelineFeatureType
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.processor import DataProcessorPipeline
-from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE, OBS_STR
+from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE, OBS_STR, OBS_PCL, OBS_MESH
 
 
 def create_initial_features(
@@ -60,7 +60,7 @@ def strip_prefix(key: str, prefixes_to_strip: tuple[str]) -> str:
 # Define prefixes to strip from feature keys for clean names.
 # Handles both fully qualified (e.g., "action.state") and short (e.g., "state") forms.
 PREFIXES_TO_STRIP = tuple(
-    f"{token}." for const in (ACTION, OBS_STATE, OBS_IMAGES) for token in (const, const.split(".")[-1])
+    f"{token}." for const in (ACTION, OBS_STATE, OBS_IMAGES, OBS_PCL, OBS_MESH) for token in (const, const.split(".")[-1])
 )
 
 

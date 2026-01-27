@@ -1,0 +1,12 @@
+# Core dependencies
+numpy>=1.24.0
+opencv-python>=4.9.0  # NOT headless - for GUI support
+pyrealsense2>=2.54.0
+torch>=2.0.0
+pyyaml>=6.0
+
+# 3D visualization
+open3d>=0.17.0
+
+# Note: SAM2 and MeshGAT are in external/ directories
+# They should already be available from the parent lerobot project

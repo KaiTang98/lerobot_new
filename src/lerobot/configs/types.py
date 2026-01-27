@@ -24,6 +24,8 @@ class FeatureType(str, Enum):
     ACTION = "ACTION"
     REWARD = "REWARD"
     LANGUAGE = "LANGUAGE"
+    PCL = "PCL"  # Point cloud data (N, 3) float32
+    MESH = "MESH"  # Mesh vertices (N, 3) float32
 
 
 class PipelineFeatureType(str, Enum):

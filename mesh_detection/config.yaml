@@ -1,0 +1,95 @@
+# Configuration for standalone mesh detection system
+
+camera:
+  serial: "f1181599"
+  # Color stream settings
+  color_width: 1920
+  color_height: 1080
+  # Depth stream settings (L515 supports: 320x240, 640x480, 1024x768 @ 30fps)
+  depth_width: 1024
+  depth_height: 768
+  fps: 30
+  use_depth: true
+
+processing:
+  device: "cuda"
+  resample_method: "random"  # "random" or "fps"
+  # Resize frames before processing (for performance)
+  # Set to null to use camera resolution (recommended when camera is already at desired size)
+  processing_width: 640  # Set to null to skip resize (same as camera res)
+  processing_height: 480  # Set to null to skip resize
+
+sam2:
+  checkpoint: "/home/ktang/ws/lerobot_new/external/sam2/checkpoints/sam2.1_hiera_tiny.pt"
+  model_config: "configs/sam2.1/sam2.1_hiera_t.yaml"  # Relative to SAM2 package
+  
+  # Initialization mode
+  auto_detect: true  # If true, use fabric detector; if false, use manual point/box (faster)
+  
+  # Manual initialization (used when auto_detect=false)
+  initial_point: [320, 240]  # Center of image [x, y]
+  initial_box: null  # Alternative: [x1, y1, x2, y2]
+
+# Fabric detection settings (used when sam2.auto_detect=true)
+fabric_detection:
+  # Depth filtering
+  depth_min: 0.77  # meters - filter very close objects
+  depth_max: 0.91  # meters - filter background/table
+  
+  # Robot detection (assumes robot is low saturation - black/white/gray)
+  robot_saturation_max: 0.35  # HSV saturation (0-1)
+  robot_value_range: [0.0, 1.0]  # HSV value range
+  
+  # Table detection (white surface)
+  table_saturation_max: 0.2  # HSV saturation
+  table_value_min: 0.7  # HSV value (bright)
+  table_depth_std_max: 0.02  # meters - flat surface threshold
+  
+  # Fabric validation
+  min_fabric_area: 1000  # pixels
+  min_confidence: 0.5  # Minimum confidence to accept detection
+  
+  # Morphology operations
+  morph_kernel_size: 7  # Increased from 5 to reduce fragmentation
+  
+  # Static mask for fixed objects (e.g., sewing machine)
+  static_mask_path: "/home/ktang/ws/lerobot_new/mesh_detection/mask/static_mask.png"  # Optional path to .png mask file
+  
+  # Debug
+  enable_debug: false  # Save debug visualizations
+
+# SAM2 tracking settings (used when auto_detect=true)
+tracking:
+  # Loss detection thresholds
+  min_mask_area_ratio: 0.3  # Relative to initial area
+  min_mask_iou: 0.5  # IoU with previous frame
+  max_components: 50  # Fragmentation threshold
+  
+  # Re-initialization behavior
+  loss_patience_frames: 5  # Wait N frames before re-init
+  reinit_cooldown_frames: 10  # Avoid rapid re-init
+  
+  # Temporal smoothing
+  point_smoothing_frames: 3  # Average point over N frames for stability
+
+meshgat:
+  checkpoint: "/home/ktang/ws/data/mesh_gat/collar_pcl/checkpoint/finalbestmodel_1999_0.00645.pt"
+  config: "/home/ktang/ws/data/mesh_gat/collar_pcl/checkpoint/config.yaml"
+  template: null  # Optional template path
+  target_num_points: 1024
+
+visualization:
+  enable_2d: true
+  enable_3d: false
+  show_original_rgb: false  # Show separate window with original (full-res) RGB
+  show_original_depth: false  # Show separate window with original depth
+  show_filtered_depth: true  # Show depth after applying depth_min/max filtering
+  apply_static_mask_to_visualization: true  # Filter visualization mask by static mask (removes fixed objects)
+  mesh_color: [0.8, 0.2, 0.2]  # RGB (0-1)
+  pointcloud_color: [0.2, 0.8, 0.2]  # RGB (0-1)
+
+output:
+  save_dir: "output"
+  auto_save: false  # Auto-save every frame
+  record_visualization: false  # Record visualization RGB with mask overlay to video file
+  video_fps: 30  # FPS for recorded video

@@ -1,0 +1,40 @@
+# Configuration for Denso DeltaPose Force robot WITHOUT MeshGAT (standard recording)
+# Usage: lerobot-record --config configs/denso_deltapose_force_standard.yaml
+
+robot:
+  type: denso_deltapose_force
+  server_ip: "192.168.2.105"
+  server_port: 12345
+  fps: 100
+  
+  # Camera Configuration (standard RGB cameras)
+  cameras:
+    camera_l515:
+      type: intelrealsense
+      serial_number_or_name: f1181599
+      width: 640
+      height: 480
+      fps: 30
+      use_depth: false  # Disable depth if not using MeshGAT
+      color_mode: RGB
+  
+  # MeshGAT is disabled by default
+  enable_meshgat: false
+
+# Teleoperator Configuration (Quest 3 with haptics)
+teleop:
+  type: bi_quest_haptics
+
+# Dataset Configuration
+dataset:
+  repo_id: ${HF_USER}/denso_manipulation
+  single_task: "Manipulate objects using both arms with force feedback"
+  fps: 30
+  num_episodes: 50
+  video: true
+  push_to_hub: false
+  root: data/lerobot
+
+# Optional: Display settings
+display_data: true
+play_sounds: true

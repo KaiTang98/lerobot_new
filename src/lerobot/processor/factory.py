@@ -56,6 +56,7 @@ def make_questhaptics_densowindows_robot_observation_processor() -> RobotProcess
     )
     return robot_observation_processor
 
+
 def make_questhaptics_densodeltapose_robot_observation_processor() -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
     # Strip _last_remote_action so processed obs is clean (state + cameras only).
     robot_observation_processor = RobotProcessorPipeline[RobotObservation, RobotObservation](
@@ -64,6 +65,7 @@ def make_questhaptics_densodeltapose_robot_observation_processor() -> RobotProce
         to_output=transition_to_observation,
     )
     return robot_observation_processor
+
 
 def make_questhaptics_densodeltapose_force_robot_observation_processor() -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
     # Strip _last_remote_action so processed obs is clean (state + cameras only).
@@ -82,6 +84,7 @@ def make_denso_meshgat_robot_observation_processor(
     device: str = "cuda",
     input_key: str = "pcl",
     output_key: str = "mesh_vertices",
+    camera_key: str | None = None,
     # NEW: SAM2 and FabricPointCloud parameters
     camera_intrinsics: np.ndarray | None = None,
     depth_scale: float | None = None,
@@ -89,6 +92,7 @@ def make_denso_meshgat_robot_observation_processor(
     sam2_initial_point: list[int] | None = None,
     sam2_initial_box: list[int] | None = None,
     target_num_points: int = 1024,
+    expected_num_vertices: int | None = None,
     enable_pointcloud: bool = False,
 ) -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
     """Robot observation processor for Denso robots with MeshGAT inference.
@@ -110,6 +114,7 @@ def make_denso_meshgat_robot_observation_processor(
         sam2_initial_point: [x, y] initial point on fabric (if enable_pointcloud=True)
         sam2_initial_box: [x1, y1, x2, y2] box around fabric (if enable_pointcloud=True)
         target_num_points: Number of points in output pointcloud
+        expected_num_vertices: Expected number of mesh vertices for dataset consistency (e.g., 442)
         enable_pointcloud: If True, add FabricPointCloudProcessorStep before MeshGAT
 
     Returns:
@@ -141,10 +146,13 @@ def make_denso_meshgat_robot_observation_processor(
     
     # Optionally add FabricPointCloudProcessorStep
     if enable_pointcloud:
-        if camera_intrinsics is None or depth_scale is None:
-            raise ValueError(
-                "enable_pointcloud=True requires camera_intrinsics and depth_scale"
-            )
+        # Camera intrinsics and depth_scale will be populated after robot.connect()
+        # Use placeholder values if None, they'll be updated later
+        if camera_intrinsics is None:
+            camera_intrinsics = np.array([[600.974, 0, 331.946], [0, 600.819, 248.233], [0, 0, 1]], dtype=np.float32)
+        if depth_scale is None:
+            depth_scale = 0.000250  # Default for L515
+            
         if sam2_checkpoint is None:
             raise ValueError("enable_pointcloud=True requires sam2_checkpoint")
         if sam2_initial_point is None and sam2_initial_box is None:
@@ -155,9 +163,21 @@ def make_denso_meshgat_robot_observation_processor(
         # Import here to avoid circular imports
         import sys
         import os
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../external/sam2"))
+        # Add external/ and external/sam2 to path
+        # factory.py is at src/lerobot/processor/factory.py, so go up 3 levels
+        workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+        external_path = os.path.join(workspace_root, "external")
+        sam2_path = os.path.join(workspace_root, "external", "sam2")
         
-        from external.sam2_api import create_sam2_camera_runner
+        # Add paths if they exist
+        if os.path.exists(external_path) and external_path not in sys.path:
+            sys.path.insert(0, external_path)
+        if os.path.exists(sam2_path) and sam2_path not in sys.path:
+            sys.path.insert(0, sam2_path)
+        
+        # Now import - since external_path is in sys.path, we can import external as a package
+        import sam2_api
+        create_sam2_camera_runner = sam2_api.create_sam2_camera_runner
         from .fabric_pointcloud_processor import FabricPointCloudProcessorStep
         
         # Create SAM2 runner
@@ -182,11 +202,22 @@ def make_denso_meshgat_robot_observation_processor(
             cx = float(camera_intrinsics[0][2])
             cy = float(camera_intrinsics[1][2])
         
+        # Determine rgb/depth input keys. If a camera_key is provided (e.g. "camera_l515")
+        # the robot observation produces flat keys like `camera_l515` and
+        # `camera_l515_depth`. Use those; otherwise fall back to the legacy
+        # "rgb"/"depth" keys.
+        if camera_key is not None:
+            rgb_input_key = camera_key
+            depth_input_key = f"{camera_key}_depth"
+        else:
+            rgb_input_key = "rgb"
+            depth_input_key = "depth"
+
         # Add FabricPointCloud step
         steps.append(
             FabricPointCloudProcessorStep(
-                rgb_key="rgb",
-                depth_key="depth",
+                rgb_key=rgb_input_key,
+                depth_key=depth_input_key,
                 fx=fx,
                 fy=fy,
                 cx=cx,
@@ -208,6 +239,7 @@ def make_denso_meshgat_robot_observation_processor(
             device=device,
             input_key=input_key,
             output_key=output_key,
+            expected_num_vertices=expected_num_vertices,
         )
     )
 
@@ -243,6 +275,7 @@ def make_questhaptics_densowindows_teleop_action_processor() -> RobotProcessorPi
     )
     return teleop_action_processor
 
+
 def make_questhaptics_densodeltapose_teleop_action_processor() -> RobotProcessorPipeline[
     tuple[RobotAction, RobotObservation], RobotAction
 ]:
@@ -254,6 +287,7 @@ def make_questhaptics_densodeltapose_teleop_action_processor() -> RobotProcessor
         to_output=transition_to_robot_action,
     )
     return teleop_action_processor
+
 
 def make_questhaptics_densodeltapose_force_teleop_action_processor() -> RobotProcessorPipeline[
     tuple[RobotAction, RobotObservation], RobotAction
@@ -281,6 +315,7 @@ def make_default_robot_action_processor() -> RobotProcessorPipeline[
     )
     return robot_action_processor
 
+
 def make_questhaptics_densowindows_robot_action_processor() -> RobotProcessorPipeline[
     tuple[RobotAction, RobotObservation], RobotAction
 ]:
@@ -290,6 +325,7 @@ def make_questhaptics_densowindows_robot_action_processor() -> RobotProcessorPip
         to_output=transition_to_robot_action,
     )
     return robot_action_processor
+
 
 def make_questhaptics_densodeltapose_robot_action_processor() -> RobotProcessorPipeline[
     tuple[RobotAction, RobotObservation], RobotAction
@@ -302,6 +338,7 @@ def make_questhaptics_densodeltapose_robot_action_processor() -> RobotProcessorP
     )
     return robot_action_processor
 
+
 def make_questhaptics_densodeltapose_force_robot_action_processor() -> RobotProcessorPipeline[
     tuple[RobotAction, RobotObservation], RobotAction
 ]:
@@ -313,12 +350,20 @@ def make_questhaptics_densodeltapose_force_robot_action_processor() -> RobotProc
     )
     return robot_action_processor
 
+
 # ---------------------------------------------
 # ------ teleop-robot processor factory -------
 # ---------------------------------------------
 def make_teleop_robot_processors(robotConfig: RobotConfig,
                                  teleopConfig: TeleoperatorConfig | None):
 
+    # Check if MeshGAT is enabled (for denso_deltapose_force or denso_deltapose)
+    if hasattr(robotConfig, "enable_meshgat") and robotConfig.enable_meshgat:
+        if robotConfig.type == "denso_deltapose_force":
+            return make_questhaptics_densodeltapose_force_meshgat_processor(robotConfig, teleopConfig)
+        elif robotConfig.type == "denso_deltapose":
+            return make_questhaptics_densodeltapose_meshgat_processor(robotConfig, teleopConfig)
+    
     # Determine teleop processors
     if teleopConfig is not None and teleopConfig.type == "bi_quest_haptics" and robotConfig.type == "denso_windows":
         return make_questhaptics_densowindows_processor()
@@ -351,6 +396,7 @@ def make_questhaptics_densodeltapose_processor():
     robot_action_processor = make_questhaptics_densodeltapose_robot_action_processor()
     return (teleop_action_processor, robot_action_processor, robot_observation_processor)
 
+
 def make_questhaptics_densodeltapose_force_processor():
     # For the delta-pose robot, convert Quest absolute to deltapose_* via dedicated step.
     robot_observation_processor = make_questhaptics_densodeltapose_force_robot_observation_processor()
@@ -358,3 +404,84 @@ def make_questhaptics_densodeltapose_force_processor():
     robot_action_processor = make_questhaptics_densodeltapose_force_robot_action_processor()
     return (teleop_action_processor, robot_action_processor, robot_observation_processor)
 
+
+def make_questhaptics_densodeltapose_meshgat_processor(
+    robotConfig: RobotConfig,
+    teleopConfig: TeleoperatorConfig | None
+):
+    """Create processors with MeshGAT observation pipeline for denso_deltapose."""
+    
+    # Get camera config to extract intrinsics and depth_scale
+    camera_key = robotConfig.meshgat_camera_key
+    camera_cfg = robotConfig.cameras[camera_key]
+    
+    # Camera intrinsics will be available after connect(), but we can pass the config
+    # The actual intrinsics will be read at runtime from the camera
+    camera_intrinsics = getattr(camera_cfg, "camera_intrinsics", None)
+    depth_scale = getattr(camera_cfg, "depth_scale", None)
+    
+    # Build observation processor with MeshGAT
+    robot_observation_processor = make_denso_meshgat_robot_observation_processor(
+        checkpoint_path=robotConfig.meshgat_checkpoint_path,
+        config_path=robotConfig.meshgat_config_path,
+        template_path=robotConfig.meshgat_template_path,
+        device=robotConfig.meshgat_device,
+        input_key=robotConfig.meshgat_input_key,
+        output_key=robotConfig.meshgat_output_key,
+            camera_key=camera_key,
+            camera_intrinsics=camera_intrinsics,
+        depth_scale=depth_scale,
+        sam2_checkpoint=robotConfig.sam2_checkpoint_path,
+        sam2_initial_point=robotConfig.sam2_initial_point,
+        sam2_initial_box=robotConfig.sam2_initial_box,
+        target_num_points=robotConfig.meshgat_target_num_points,
+        expected_num_vertices=getattr(robotConfig, "meshgat_expected_num_vertices", None),
+        enable_pointcloud=True,
+    )
+    
+    # Use denso_deltapose teleop/action processors
+    teleop_action_processor = make_questhaptics_densodeltapose_teleop_action_processor()
+    robot_action_processor = make_questhaptics_densodeltapose_robot_action_processor()
+    
+    return (teleop_action_processor, robot_action_processor, robot_observation_processor)
+
+
+def make_questhaptics_densodeltapose_force_meshgat_processor(
+    robotConfig: RobotConfig,
+    teleopConfig: TeleoperatorConfig | None
+):
+    """Create processors with MeshGAT observation pipeline for denso_deltapose_force."""
+    
+    # Get camera config to extract intrinsics and depth_scale
+    camera_key = robotConfig.meshgat_camera_key
+    camera_cfg = robotConfig.cameras[camera_key]
+    
+    # Camera intrinsics will be available after connect(), but we can pass the config
+    # The actual intrinsics will be read at runtime from the camera
+    camera_intrinsics = getattr(camera_cfg, "camera_intrinsics", None)
+    depth_scale = getattr(camera_cfg, "depth_scale", None)
+    
+    # Build observation processor with MeshGAT
+    robot_observation_processor = make_denso_meshgat_robot_observation_processor(
+        checkpoint_path=robotConfig.meshgat_checkpoint_path,
+        config_path=robotConfig.meshgat_config_path,
+        template_path=robotConfig.meshgat_template_path,
+        device=robotConfig.meshgat_device,
+        input_key=robotConfig.meshgat_input_key,
+        output_key=robotConfig.meshgat_output_key,
+            camera_key=camera_key,
+            camera_intrinsics=camera_intrinsics,
+        depth_scale=depth_scale,
+        sam2_checkpoint=robotConfig.sam2_checkpoint_path,
+        sam2_initial_point=robotConfig.sam2_initial_point,
+        sam2_initial_box=robotConfig.sam2_initial_box,
+        target_num_points=robotConfig.meshgat_target_num_points,
+        expected_num_vertices=getattr(robotConfig, "meshgat_expected_num_vertices", None),
+        enable_pointcloud=True,
+    )
+    
+    # Use denso_deltapose_force teleop/action processors
+    teleop_action_processor = make_questhaptics_densodeltapose_force_teleop_action_processor()
+    robot_action_processor = make_questhaptics_densodeltapose_force_robot_action_processor()
+    
+    return (teleop_action_processor, robot_action_processor, robot_observation_processor)

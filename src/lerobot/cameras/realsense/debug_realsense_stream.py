@@ -27,6 +27,9 @@ def main() -> None:
         serial_number_or_name=serial_or_name,
         use_depth=True,
         color_mode=ColorMode.BGR,
+        width=640,
+        height=480,
+        fps=30,
     )
 
     cam = RealSenseCamera(config)
